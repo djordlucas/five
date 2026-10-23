@@ -32,6 +32,8 @@ export interface Config {
   contextWarn: number;
   /** Turns in a row without a tool call after which the loop pauses; 0 never. */
   idleTurns: number;
+  /** A result of a run longer than this, in characters, goes to a file and its start to the context; 0 never. */
+  resultChars: number;
   /** Start looping as soon as five starts, even if it was paused when it last stopped. */
   autostart: boolean;
   /** Where the HTTP API and web UI listen (host:port). */
@@ -59,6 +61,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     turnDelayMs: int(env.FIVE_TURN_DELAY_MS, 1000),
     contextWarn: Math.min(int(env.FIVE_CONTEXT_WARN, 60), 100) / 100,
     idleTurns: int(env.FIVE_IDLE_TURNS, 3),
+    resultChars: int(env.FIVE_RESULT_CHARS, 3000),
     autostart: flag(env.FIVE_AUTOSTART, "FIVE_AUTOSTART"),
     apiAddr: env.FIVE_API_ADDR ?? "127.0.0.1:5555",
     logLevel: parseLevel(env.FIVE_LOG_LEVEL, "info"),

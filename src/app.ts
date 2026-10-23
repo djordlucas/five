@@ -50,6 +50,7 @@ export function createFive(cfg: Config, model: ChatModel, log: Logger = noopLogg
     turnDelayMs: cfg.turnDelayMs,
     contextWarn: cfg.contextWarn,
     idleTurns: cfg.idleTurns,
+    resultChars: cfg.resultChars,
     log,
   });
   return {

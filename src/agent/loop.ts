@@ -8,12 +8,14 @@
 //
 // Five keeps out of the context but for two guards: when the last call filled
 // most of the window, the turn's prompt starts with a warning; and turns that
-// end without a single tool call, several in a row, pause the loop.
+// end without a single tool call, several in a row, pause the loop. A turn the
+// agent ends with a summary is folded into it, and a long result of a run is
+// kept in a file, with only its start in the context.
 
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { LoopStatus } from "../api/types.ts";
-import type { ChatModel, ToolCall, ToolDef } from "../llm/model.ts";
+import type { ChatModel, Message, ToolCall, ToolDef } from "../llm/model.ts";
 import { recoverToolCalls } from "../llm/textcalls.ts";
 import { type Logger, noopLogger, preview } from "../log.ts";
 import type { Runner } from "../runner/index.ts";
@@ -31,6 +33,8 @@ export const AGENT_ID = "five";
 
 /** A tool result longer than this is cut. */
 const MAX_RESULT_CHARS = 16_000;
+/** Where long results of runs are kept, in the workspace. */
+export const RESULTS_DIR = "results";
 /** Waits after a failed turn, doubling up to the last. */
 const BACKOFF_MS = [5_000, 10_000, 30_000, 60_000];
 
@@ -49,6 +53,8 @@ export interface LoopOptions {
   contextWarn?: number;
   /** Turns in a row without a tool call after which the loop pauses; 0 never. */
   idleTurns?: number;
+  /** A result of a run longer than this goes to a file, its start to the context; 0 never. */
+  resultChars?: number;
   log?: Logger;
   onEvent?: (e: Event) => void;
 }
@@ -231,7 +237,8 @@ export class Loop {
     const started = performance.now();
     const prompt = ctx.next;
     const warning = this.contextWarning();
-    ctx.messages.push({ role: "user", content: warning ? `${warning}\n\n${prompt}` : prompt });
+    const opening: Message = { role: "user", content: warning ? `${warning}\n\n${prompt}` : prompt };
+    ctx.messages.push(opening);
     this.save();
     this.emit({ type: "turn_started", prompt, ...(warning && { warning }) });
     log.info("turn started", { ...(log.enabled("debug") && { prompt: preview(prompt) }) });
@@ -284,9 +291,14 @@ export class Loop {
 
         calls += message.tool_calls.length;
         let end = false;
+        let summary: string | undefined;
         for (const call of message.tool_calls) {
           const t1 = performance.now();
-          const result = truncate(await this.dispatch(call, stepLog, () => (end = true)));
+          const raw = await this.dispatch(call, stepLog, (s) => {
+            end = true;
+            summary ??= s;
+          });
+          const result = this.fit(raw, call);
           ctx.messages.push({ role: "tool", tool_call_id: call.id, name: call.function.name, content: result });
           this.save();
           this.emit({
@@ -302,6 +314,7 @@ export class Loop {
         }
         if (end) {
           reason = "end_turn";
+          if (summary) this.fold(opening, summary);
           break;
         }
       }
@@ -333,13 +346,49 @@ export class Loop {
     }
   }
 
+  /**
+   * Replace the turn's messages, from its prompt on, with the agent's summary.
+   * When the agent deleted its prompt, the turn's messages stay.
+   */
+  private fold(opening: Message, summary: string): void {
+    const { messages, turn } = this.ctx;
+    const i = messages.indexOf(opening);
+    if (i < 0) return;
+    const n = messages.length - i;
+    messages.splice(i, n, { role: "assistant", content: `[Turn ${turn}, summarized] ${summary}` });
+    this.emit({ type: "context", by: "model", change: `turn ${turn}'s ${n} messages replaced by its summary` });
+    this.o.log.info("turn folded", { turn, messages: n });
+  }
+
+  /** A run's result, cut to fit the context: a long one is kept whole in a file the context points to. */
+  private fit(result: string, call: ToolCall): string {
+    const { resultChars = 0 } = this.o;
+    if (resultChars <= 0 || result.length <= resultChars || contextToolsByName.has(call.function.name)) {
+      return truncate(result);
+    }
+    const rel = path.join(RESULTS_DIR, `turn-${this.ctx.turn}-${call.id.replace(/[^\w-]/g, "_")}.txt`);
+    try {
+      fs.mkdirSync(path.join(this.o.workspace, RESULTS_DIR), { recursive: true });
+      fs.writeFileSync(path.join(this.o.workspace, rel), result);
+    } catch (err) {
+      this.o.log.warn("result not kept", { error: err instanceof Error ? err.message : String(err) });
+      return truncate(result);
+    }
+    return `${result.slice(0, resultChars)}\n… [${result.length - resultChars} more characters; the whole result is in ${rel}]`;
+  }
+
   /** The warning a turn's prompt starts with when the last call filled most of the window. */
   private contextWarning(): string | undefined {
     const { contextWarn = 0, contextTokens } = this.o;
     const used = this.promptTokens;
     if (contextWarn <= 0 || used === null || used < contextWarn * contextTokens) return undefined;
     const share = Math.round((100 * used) / contextTokens);
-    return `[five] Your context is ${used.toLocaleString("en-US")} of ${contextTokens.toLocaleString("en-US")} tokens (${share}%). When it is full the oldest text is silently lost and you can no longer work. Before anything else, save what you still need with memory_write, then call read_context and delete_messages you no longer need.`;
+    const before = this.ctx.messages.length;
+    const drop =
+      before > 0
+        ? ` Messages 0–${before - 1} came before this turn: delete_messages with start 0 and end ${before - 1} drops them all, or pick the ones to drop with read_context.`
+        : "";
+    return `[five] Your context is ${used.toLocaleString("en-US")} of ${contextTokens.toLocaleString("en-US")} tokens (${share}%). When it is full the oldest text is silently lost and you can no longer work. Before anything else, save what you still need with memory_write, then delete messages you no longer need.${drop}`;
   }
 
   /** Every tool the agent can call now: its context tools, seven's built-ins, and the enabled tools it built. */
@@ -355,7 +404,7 @@ export class Loop {
     ];
   }
 
-  private async dispatch(call: ToolCall, stepLog: Logger, endTurn: () => void): Promise<string> {
+  private async dispatch(call: ToolCall, stepLog: Logger, endTurn: (summary?: string) => void): Promise<string> {
     const { name, arguments: raw } = call.function;
     const log = stepLog.child({ call: call.id });
     const started = performance.now();
@@ -402,7 +451,7 @@ export class Loop {
     return result;
   }
 
-  private contextEnv(endTurn: () => void): ContextEnv {
+  private contextEnv(endTurn: (summary?: string) => void): ContextEnv {
     return {
       ctx: this.ctx,
       ...(this.promptTokens !== null && { promptTokens: this.promptTokens }),

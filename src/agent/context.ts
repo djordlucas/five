@@ -22,8 +22,8 @@ export interface ContextEnv {
   workspace: string;
   /** Records a change for the event log. */
   changed(change: string): void;
-  /** Ends the turn once this step's calls are done. */
-  endTurn(): void;
+  /** Ends the turn once this step's calls are done; with a summary, it replaces the turn's messages. */
+  endTurn(summary?: string): void;
 }
 
 /** Characters of each message read_context shows unless asked for full text. */
@@ -262,11 +262,36 @@ export const contextTools: ContextTool[] = [
   {
     name: "end_turn",
     description:
-      "End this turn after this step's calls. Replying without any tool call ends it too. The next turn starts with the next prompt.",
-    parameters: { type: "object", properties: {} },
-    run(_a, env) {
-      env.endTurn();
-      return "the turn ends after this step";
+      "End this turn after this step's calls. With a summary, every message of this turn — from its prompt on — is " +
+      "replaced by the summary, which keeps your context small. With next, set the prompt of your next turn. " +
+      "Replying without any tool call ends the turn too, but keeps all its messages.",
+    parameters: {
+      type: "object",
+      properties: {
+        summary: {
+          type: "string",
+          description:
+            "A few lines: what this turn did and found, and what is in memory. Replaces the turn's messages.",
+        },
+        next: {
+          type: "string",
+          description: "The prompt of your next turn: what to do, and which notes and files to read first.",
+        },
+      },
+    },
+    run(a, env) {
+      const next = typeof a.next === "string" ? a.next.trim() : "";
+      if (next) {
+        env.ctx.next = next;
+        env.changed("next prompt set");
+      }
+      const summary = typeof a.summary === "string" ? a.summary.trim() : "";
+      env.endTurn(summary || undefined);
+      return [
+        "the turn ends after this step",
+        summary ? "its messages are replaced by your summary" : "its messages stay: pass a summary to replace them",
+        next ? "next prompt set" : "the next prompt is unchanged",
+      ].join("; ");
     },
   },
 ];
