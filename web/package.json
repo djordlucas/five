@@ -1,0 +1,21 @@
+{
+  "name": "five-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@preact/signals": "^2.11.3",
+    "marked": "^18.1.1",
+    "preact": "^11.0.1",
+    "preact-iso": "^2.12.2"
+  },
+  "devDependencies": {
+    "@preact/preset-vite": "^2.10.6",
+    "typescript": "^5.9.3",
+    "vite": "^8.3.4"
+  }
+}

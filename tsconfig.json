@@ -1,0 +1,21 @@
+{
+  // Typecheck only: Node runs the .ts sources directly (type stripping), so
+  // nothing is emitted. erasableSyntaxOnly rejects the TypeScript features
+  // stripping cannot handle (enums, parameter properties, namespaces).
+  "compilerOptions": {
+    "target": "es2024",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "lib": ["es2024"],
+    "types": ["node"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "skipLibCheck": true
+  },
+  "include": ["src", "test"]
+}

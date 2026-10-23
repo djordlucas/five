@@ -1,0 +1,56 @@
+# Development and local runs.
+#
+#   docker compose up -d five          the loop, in the background, with the web
+#                                      UI on port 5555
+#   docker compose run --rm dev        shell in the toolchain, repo at /app
+#
+# All of five's data lives in ./workspace, mounted at /workspace. Ollama runs on
+# the host, at http://host.docker.internal:11434. Both read .env when it exists.
+
+services:
+  five:
+    build:
+      context: .
+      target: runtime
+    image: five:latest
+    volumes:
+      - ./workspace:/workspace
+    env_file:
+      - path: .env
+        required: false
+    # Linux needs the mapping for host.docker.internal.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      # Every interface, for remote access. There is no sign-in: whoever reaches
+      # this port can run code as five. FIVE_PUBLISH=127.0.0.1 keeps it local.
+      - "${FIVE_PUBLISH:-0.0.0.0}:5555:5555"
+    restart: unless-stopped
+
+  dev:
+    build:
+      context: .
+      target: dev
+    image: five:dev
+    working_dir: /app
+    volumes:
+      - .:/app
+      # The container's own node_modules: the host's is built for the host
+      # platform (esbuild ships a native binary per OS and CPU).
+      - dev-node-modules:/app/node_modules
+      - dev-web-node-modules:/app/web/node_modules
+      - ./workspace:/workspace
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      FIVE_OLLAMA_ENDPOINT: http://host.docker.internal:11434
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    stdin_open: true
+    tty: true
+    profiles: ["dev"]
+
+volumes:
+  dev-node-modules:
+  dev-web-node-modules:

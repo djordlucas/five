@@ -1,0 +1,30 @@
+{
+  "name": "five",
+  "version": "0.0.0",
+  "private": true,
+  "description": "An experimental self-modifying agent: one agent in an endless loop that reads and rewrites its own context.",
+  "license": "GPL-3.0-only",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "bin": {
+    "five": "src/main.ts"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env --disable-warning=ExperimentalWarning src/main.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "node --disable-warning=ExperimentalWarning --test 'test/**/*.test.ts'",
+    "lint": "biome check .",
+    "fmt": "biome check --write .",
+    "ci": "npm run typecheck && npm run lint && npm test"
+  },
+  "dependencies": {
+    "esbuild": "0.28.2"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.6.2",
+    "@types/node": "24.19.2",
+    "typescript": "7.0.2"
+  }
+}

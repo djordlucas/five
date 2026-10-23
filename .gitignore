@@ -1,0 +1,11 @@
+node_modules/
+web/dist/
+
+# five's own data when run from the repo.
+/.five/
+
+# The container workspace (compose.yaml mounts it at /workspace).
+/workspace/
+
+.env
+*.log

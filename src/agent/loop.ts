@@ -1,0 +1,384 @@
+// The supervisor: one agent, one context, turns without end.
+//
+// A turn appends the next prompt to the context as a user message, then asks
+// the model, runs the tools it calls and asks again, until it replies without
+// a call, calls end_turn, or runs out of steps. The next turn starts with the
+// prompt the agent set with set_next_prompt, or the same one. The context is
+// saved after every change, so a restart resumes it.
+
+import type { LoopStatus } from "../api/types.ts";
+import type { ChatModel, ToolCall, ToolDef } from "../llm/model.ts";
+import { recoverToolCalls } from "../llm/textcalls.ts";
+import { type Logger, noopLogger, preview } from "../log.ts";
+import type { Runner } from "../runner/index.ts";
+import type { Context, Event, EventBody, State, TurnEnd } from "../state.ts";
+import type { ToolStore } from "../tools/store.ts";
+import { checkArgs, coerceArgs, parseArgs } from "./args.ts";
+import { awaitRun, type BuiltinContext, builtins, disabledError, formatRun, startGenerated } from "./builtins/index.ts";
+import { sleep } from "./builtins/shared.ts";
+import { type ContextEnv, contextTools, contextToolsByName } from "./context.ts";
+import { SEED_PROMPT, seedSystemPrompt } from "./prompt.ts";
+import type { RunTable } from "./runs.ts";
+
+/** Who calls tools, in run histories. */
+export const AGENT_ID = "five";
+
+/** A tool result longer than this is cut. */
+const MAX_RESULT_CHARS = 16_000;
+/** Waits after a failed turn, doubling up to the last. */
+const BACKOFF_MS = [5_000, 10_000, 30_000, 60_000];
+
+export interface LoopOptions {
+  state: State;
+  store: ToolStore;
+  runner: Runner;
+  runs: RunTable;
+  model: ChatModel;
+  workspace: string;
+  stateDb: string;
+  contextTokens: number;
+  maxSteps: number;
+  turnDelayMs: number;
+  log?: Logger;
+  onEvent?: (e: Event) => void;
+}
+
+export class Loop {
+  readonly ctx: Context;
+  private readonly o: LoopOptions & { log: Logger };
+  private running = false;
+  private busy = false;
+  private step = 0;
+  private promptTokens: number | null = null;
+  private failures = 0;
+  private retryAt: number | null = null;
+  private abort?: AbortController;
+  /** Interrupts the wait between turns. */
+  private wait?: AbortController;
+  private driving?: Promise<void>;
+  private current?: Promise<void>;
+
+  constructor(opts: LoopOptions) {
+    this.o = { log: noopLogger, ...opts, ...(opts.log && { log: opts.log.child({ component: "loop" }) }) };
+    this.ctx = opts.state.loadContext() ?? this.seed();
+    if (!opts.state.loadContext()) opts.state.saveContext(this.ctx);
+  }
+
+  status(): LoopStatus {
+    return {
+      running: this.running,
+      busy: this.busy,
+      turn: this.ctx.turn,
+      step: this.step,
+      promptTokens: this.promptTokens,
+      retryAt: this.retryAt ? new Date(this.retryAt).toISOString() : null,
+    };
+  }
+
+  /** Loop: one turn after another until paused. */
+  start(): void {
+    if (this.running) return;
+    this.running = true;
+    this.failures = 0;
+    this.emit({ type: "loop", state: "started" });
+    this.o.log.info("loop started", { turn: this.ctx.turn });
+    this.driving ??= this.drive().finally(() => {
+      this.driving = undefined;
+    });
+  }
+
+  /** Stop looping once the current turn ends. */
+  pause(): void {
+    if (!this.running) return;
+    this.running = false;
+    this.wait?.abort();
+    this.emit({ type: "loop", state: "paused" });
+    this.o.log.info("loop paused", { turn: this.ctx.turn, busy: this.busy });
+  }
+
+  /** Pause, and end the current turn now. */
+  stop(): void {
+    this.pause();
+    this.abort?.abort();
+  }
+
+  /** Run one turn while paused. */
+  stepOnce(): void {
+    if (this.running || this.busy) throw new Error("a turn is already running");
+    void this.turn();
+  }
+
+  /** Change the context from outside the loop (the web UI); refused during a turn. */
+  edit(change: string, fn: (ctx: Context) => void): void {
+    if (this.busy) throw new Error("the context cannot be changed during a turn; pause and wait for the turn to end");
+    fn(this.ctx);
+    this.save();
+    this.emit({ type: "context", by: "user", change });
+    this.o.log.info("context changed", { by: "user", change });
+  }
+
+  /** Start over: the seed system prompt and prompt (or those given), no messages, turn 0, no events. */
+  reset(opts: { system?: string; next?: string } = {}): void {
+    if (this.busy) throw new Error("cannot reset during a turn; pause and wait for the turn to end");
+    Object.assign(this.ctx, this.seed(), {
+      ...(opts.system?.trim() && { system: opts.system }),
+      ...(opts.next?.trim() && { next: opts.next }),
+    });
+    this.promptTokens = null;
+    this.o.state.clearEvents();
+    this.save();
+    this.o.log.info("context reset");
+  }
+
+  /** Stop, and wait for the current turn to end. */
+  async shutdown(): Promise<void> {
+    this.stop();
+    await this.driving;
+    await this.current;
+  }
+
+  private seed(): Context {
+    return {
+      system: seedSystemPrompt({ workspace: this.o.workspace, contextTokens: this.o.contextTokens }),
+      messages: [],
+      next: SEED_PROMPT,
+      turn: 0,
+    };
+  }
+
+  private async drive(): Promise<void> {
+    // A turn started with stepOnce finishes first.
+    await this.current;
+    while (this.running) {
+      const ok = await this.turn();
+      if (!this.running) break;
+      this.failures = ok ? 0 : this.failures + 1;
+      const delay = ok
+        ? this.o.turnDelayMs
+        : (BACKOFF_MS[Math.min(this.failures, BACKOFF_MS.length) - 1] ?? this.o.turnDelayMs);
+      if (!ok) this.retryAt = Date.now() + delay;
+      this.wait = new AbortController();
+      await sleep(delay, this.wait.signal);
+      this.retryAt = null;
+    }
+  }
+
+  /** One turn. Resolves false when it failed. */
+  private turn(): Promise<boolean> {
+    const run = this.runTurn();
+    this.current = run.then(() => {});
+    return run;
+  }
+
+  private async runTurn(): Promise<boolean> {
+    const { ctx } = this;
+    this.busy = true;
+    this.abort = new AbortController();
+    ctx.turn++;
+    const turn = ctx.turn;
+    const log = this.o.log.child({ turn });
+    const started = performance.now();
+    const prompt = ctx.next;
+    ctx.messages.push({ role: "user", content: prompt });
+    this.save();
+    this.emit({ type: "turn_started", prompt });
+    log.info("turn started", { ...(log.enabled("debug") && { prompt: preview(prompt) }) });
+
+    let reason: TurnEnd = "max_steps";
+    let error: string | undefined;
+    try {
+      for (this.step = 1; this.step <= this.o.maxSteps; this.step++) {
+        const step = this.step;
+        const stepLog = log.child({ step });
+        const tools = this.tools();
+        const t0 = performance.now();
+        const completion = await this.o.model.complete({
+          messages: [{ role: "system", content: ctx.system }, ...ctx.messages],
+          tools,
+          signal: this.abort.signal,
+          log: stepLog,
+        });
+        const durationMs = Math.round(performance.now() - t0);
+        this.promptTokens = completion.usage?.prompt_tokens ?? this.promptTokens;
+        let { message } = completion;
+        let fromText = false;
+        if (!message.tool_calls?.length && message.content) {
+          const recovered = recoverToolCalls(message.content, new Set(tools.map((t) => t.name)));
+          if (recovered) {
+            stepLog.info("tool calls recovered from text", { tools: recovered.map((c) => c.function.name) });
+            message = { ...message, content: null, tool_calls: recovered };
+            fromText = true;
+          }
+        }
+        const { thinking, ...kept } = message;
+        ctx.messages.push(kept);
+        this.save();
+        this.emit({
+          type: "model",
+          step,
+          content: message.content,
+          ...(thinking && { thinking }),
+          calls: (message.tool_calls ?? []).map((c) => ({ id: c.id, ...c.function })),
+          ...(fromText && { fromText }),
+          promptTokens: completion.usage?.prompt_tokens,
+          completionTokens: completion.usage?.completion_tokens,
+          durationMs,
+        });
+        if (!message.tool_calls?.length) {
+          reason = "replied";
+          break;
+        }
+
+        let end = false;
+        for (const call of message.tool_calls) {
+          const t1 = performance.now();
+          const result = truncate(await this.dispatch(call, stepLog, () => (end = true)));
+          ctx.messages.push({ role: "tool", tool_call_id: call.id, name: call.function.name, content: result });
+          this.save();
+          this.emit({
+            type: "tool",
+            step,
+            id: call.id,
+            name: call.function.name,
+            arguments: call.function.arguments,
+            result,
+            ok: !isFailure(result),
+            durationMs: Math.round(performance.now() - t1),
+          });
+        }
+        if (end) {
+          reason = "end_turn";
+          break;
+        }
+      }
+      return true;
+    } catch (err) {
+      if (this.abort.signal.aborted) {
+        reason = "stopped";
+        return true;
+      }
+      reason = "error";
+      error = err instanceof Error ? err.message : String(err);
+      return false;
+    } finally {
+      const steps = Math.min(this.step, this.o.maxSteps);
+      this.step = 0;
+      this.busy = false;
+      this.abort = undefined;
+      this.save();
+      this.emit({ type: "turn_ended", reason, next: ctx.next, ...(error && { error }) });
+      log[reason === "error" ? "error" : "info"]("turn ended", {
+        reason,
+        steps,
+        duration_ms: Math.round(performance.now() - started),
+        messages: ctx.messages.length,
+        prompt_tokens: this.promptTokens,
+        ...(error && { error }),
+      });
+    }
+  }
+
+  /** Every tool the agent can call now: its context tools, seven's built-ins, and the enabled tools it built. */
+  private tools(): ToolDef[] {
+    const def = ({ name, description, parameters }: ToolDef) => ({ name, description, parameters });
+    return [
+      ...contextTools.map(def),
+      ...[...builtins().values()].map(def),
+      ...this.o.store
+        .list()
+        .filter((t) => !t.disabled)
+        .map(def),
+    ];
+  }
+
+  private async dispatch(call: ToolCall, stepLog: Logger, endTurn: () => void): Promise<string> {
+    const { name, arguments: raw } = call.function;
+    const log = stepLog.child({ call: call.id });
+    const started = performance.now();
+    let result: string;
+    let kind: "context" | "builtin" | "generated" | "unknown" = "unknown";
+    try {
+      const parsed = parseArgs(raw ?? "");
+      const own = contextToolsByName.get(name);
+      const builtin = own ? undefined : builtins().get(name);
+      const generated = own || builtin ? undefined : this.o.store.get(name);
+      const schema = (own ?? builtin)?.parameters ?? generated?.meta.parameters;
+      const args = parsed.ok ? coerceArgs(schema, parsed.args) : {};
+      const bad = !parsed.ok ? parsed.error : schema ? checkArgs(schema, args) : undefined;
+      if (bad) result = `error: ${name}: ${bad}`;
+      else if (own) {
+        kind = "context";
+        result = own.run(args, this.contextEnv(endTurn));
+      } else if (builtin) {
+        kind = "builtin";
+        result = await builtin.run(args, this.builtinContext(log));
+      } else if (generated?.meta.disabled) {
+        kind = "generated";
+        result = disabledError(generated);
+      } else if (generated) {
+        kind = "generated";
+        const bctx = this.builtinContext(log);
+        result = formatRun(await awaitRun(startGenerated(bctx, generated, args, "sync"), bctx.signal));
+      } else {
+        result = `error: no tool named "${name}". Call only tools in your tool list; define_tool creates a new one.`;
+      }
+    } catch (err) {
+      result = `error: ${err instanceof Error ? err.message : String(err)}`;
+    }
+    const failed = isFailure(result);
+    log[failed ? "warn" : "info"]("tool called", {
+      tool: name,
+      kind,
+      ok: !failed,
+      duration_ms: Math.round(performance.now() - started),
+      result_chars: result.length,
+      ...(failed && { error: preview(result, 300) }),
+      ...(log.enabled("debug") && { args: preview(raw), result: preview(result) }),
+    });
+    return result;
+  }
+
+  private contextEnv(endTurn: () => void): ContextEnv {
+    return {
+      ctx: this.ctx,
+      ...(this.promptTokens !== null && { promptTokens: this.promptTokens }),
+      contextTokens: this.o.contextTokens,
+      changed: (change) => {
+        this.emit({ type: "context", by: "model", change });
+        this.o.log.info("context changed", { by: "model", change });
+      },
+      endTurn,
+    };
+  }
+
+  private builtinContext(log: Logger): BuiltinContext {
+    return {
+      agentId: AGENT_ID,
+      runner: this.o.runner,
+      store: this.o.store,
+      runs: this.o.runs,
+      workspace: this.o.workspace,
+      stateDb: this.o.stateDb,
+      signal: this.abort?.signal,
+      log,
+    };
+  }
+
+  private save(): void {
+    this.o.state.saveContext(this.ctx);
+  }
+
+  private emit(body: EventBody): void {
+    const e = this.o.state.addEvent(this.ctx.turn, body);
+    this.o.onEvent?.(e);
+  }
+}
+
+function isFailure(result: string): boolean {
+  return result.startsWith("error:") || result.startsWith("not saved:");
+}
+
+function truncate(s: string): string {
+  if (s.length <= MAX_RESULT_CHARS) return s;
+  return `${s.slice(0, MAX_RESULT_CHARS)}\n… [truncated ${s.length - MAX_RESULT_CHARS} of ${s.length} characters]`;
+}
