@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, test } from "node:test";
+import { SEED_PROMPT } from "../src/agent/prompt.ts";
 import { createApi } from "../src/api/server.ts";
 import type { ContextView, EventsPage, Status } from "../src/api/types.ts";
 import { createFive, type Five } from "../src/app.ts";
@@ -68,8 +69,8 @@ test("a turn runs tool calls until the model replies, and the next turn repeats 
   await turn(five);
   const roles = five.loop.ctx.messages.map((m) => m.role);
   assert.deepEqual(roles, ["user", "assistant", "tool", "assistant", "user", "assistant"]);
-  assert.equal(five.loop.ctx.messages[0]?.content, "Begin.");
-  assert.equal(five.loop.ctx.messages[4]?.content, "Begin.");
+  assert.equal(five.loop.ctx.messages[0]?.content, SEED_PROMPT);
+  assert.equal(five.loop.ctx.messages[4]?.content, SEED_PROMPT);
   assert.equal(five.loop.ctx.turn, 2);
   assert.equal(model.requests.length, 3);
   const ends = five.state.eventsAfter(0, 100).filter((e) => e.type === "turn_ended");
