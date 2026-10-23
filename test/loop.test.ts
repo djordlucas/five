@@ -227,7 +227,8 @@ test("whether the loop was running survives a restart; a pause is remembered too
 });
 
 test("a near-full context puts a warning before the turn's prompt", async () => {
-  const { five, model } = make([{ content: "a", tokens: 500 }, { content: "b", tokens: 700 }, { content: "c" }], {
+  const end: [string, Record<string, unknown>][] = [["end_turn", {}]];
+  const { five, model } = make([{ calls: end, tokens: 500 }, { calls: end, tokens: 700 }, { content: "c" }], {
     FIVE_CONTEXT_TOKENS: "1000",
   });
   await turn(five);
@@ -237,7 +238,7 @@ test("a near-full context puts a warning before the turn's prompt", async () => 
   assert.equal(prompts[0], SEED_PROMPT);
   assert.equal(prompts[1], SEED_PROMPT);
   assert.match(prompts[2] ?? "", /^\[five\] Your context is 700 of 1,000 tokens \(70%\)/);
-  assert.match(prompts[2] ?? "", /delete_messages with start 0 and end 3 drops them all/);
+  assert.match(prompts[2] ?? "", /delete_messages with start 0 and end 5 drops them all/);
   assert.ok(prompts[2]?.endsWith(SEED_PROMPT));
   const started = five.state.eventsAfter(0, 100).filter((e) => e.type === "turn_started");
   assert.deepEqual(
@@ -331,4 +332,29 @@ test("a long result of a run is kept in a file, its start in the context", async
   // A context tool's result is never cut this way.
   assert.ok((results[1]?.result.length ?? 0) > 100);
   assert.deepEqual(fs.readdirSync(path.join(cfg.workspace, "results")), [path.basename(file)]);
+});
+
+test("a next prompt that repeats the turn or reports what is done is refused", async () => {
+  const { five, model } = make([
+    {
+      calls: [
+        ["set_next_prompt", { text: SEED_PROMPT }],
+        ["end_turn", { summary: "s", next: "Turn 1 complete: wrote the plan." }],
+      ],
+    },
+    { calls: [["end_turn", { summary: "s", next: "Write chapter two." }]] },
+    { content: "idle" },
+    { content: "ok" },
+  ]);
+  await turn(five);
+  const results = five.state.eventsAfter(0, 100).flatMap((e) => (e.type === "tool" ? [e] : []));
+  assert.match(results[0]?.result ?? "", /^error: that is this turn's own prompt/);
+  assert.match(results[1]?.result ?? "", /^error: the next prompt reports what is done/);
+  assert.equal(five.loop.ctx.next, "Write chapter two.");
+  // A turn without a tool call leaves the prompt to repeat, led by a note.
+  await turn(five);
+  await turn(five);
+  const third = model.requests[3]?.at(-1)?.content as string;
+  assert.match(third, /^\[five\] Your last turn made no tool call/);
+  assert.ok(third.endsWith("Write chapter two."));
 });

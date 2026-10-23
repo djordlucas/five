@@ -20,6 +20,8 @@ export interface ContextEnv {
   contextTokens: number;
   /** Where the memory directory lives. */
   workspace: string;
+  /** The prompt this turn started with, without five's warnings. */
+  turnPrompt: string;
   /** Records a change for the event log. */
   changed(change: string): void;
   /** Ends the turn once this step's calls are done; with a summary, it replaces the turn's messages. */
@@ -185,7 +187,8 @@ export const contextTools: ContextTool[] = [
     },
     run(a, env) {
       const text = String(a.text);
-      if (!text.trim()) return "error: the next prompt cannot be empty";
+      const bad = checkNext(text, env);
+      if (bad) return bad;
       env.ctx.next = text;
       env.changed("next prompt set");
       return `next prompt set (${text.length} characters)`;
@@ -281,6 +284,8 @@ export const contextTools: ContextTool[] = [
     },
     run(a, env) {
       const next = typeof a.next === "string" ? a.next.trim() : "";
+      const bad = next ? checkNext(next, env) : undefined;
+      if (bad) return `${bad}. The turn goes on: call end_turn again with a next prompt that does.`;
       if (next) {
         env.ctx.next = next;
         env.changed("next prompt set");
@@ -305,6 +310,26 @@ function label(m: Message): string {
   }
   return m.role;
 }
+
+/** Why a next prompt would waste the next turn, if it would. */
+function checkNext(text: string, env: ContextEnv): string | undefined {
+  const t = text.trim();
+  if (!t) return "error: the next prompt cannot be empty";
+  if (t === env.turnPrompt.trim()) {
+    return "error: that is this turn's own prompt, so the next turn would redo this one; say what to do next";
+  }
+  if (DONE_REPORT.test(t)) {
+    return (
+      "error: the next prompt reports what is done instead of saying what to do next. Put the report in the summary; " +
+      "make the next prompt an instruction, and if your goal is done, rewrite ## Goal with a new one and start it"
+    );
+  }
+  return undefined;
+}
+
+/** A next prompt that opens by reporting a finished turn or goal: "Turn 22 complete", "End turn …", "Done …". */
+const DONE_REPORT =
+  /^(\W*)(turn \d+ (is )?(complete|completed|done|finished|over)\b|end(ing)? (of )?turn\b|(all )?done\b|complete[d!.]|finished\b|goal (is )?(complete|achieved|done))/i;
 
 function notePath(env: ContextEnv, name: string): string {
   return path.join(env.workspace, MEMORY_DIR, `${name}.md`);

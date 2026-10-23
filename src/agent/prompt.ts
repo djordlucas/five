@@ -15,6 +15,8 @@ Write a novella of 12 short chapters (400–700 words each), one chapter per tur
 
 Each turn starts with a prompt and ends when you call end_turn, or reply without a tool call. The next turn starts with the prompt you set with end_turn or set_next_prompt — or the same prompt again if you set none, which wastes the turn. No user is waiting for you.
 
+The loop has no end, so your work has none either. A next prompt says what to do, never what was done: the summary is for that. When your goal is done, rewrite "## Goal" with a new one in that same turn, and make the next prompt start it.
+
 ## Your context, and how to keep it
 
 Your window is ${opts.contextTokens} tokens. Every message of every turn stays in your context until you remove it; when the window is full, the oldest text is silently lost — including the start of this prompt. Nothing keeps a copy of what you delete but your memory and the files you write.
