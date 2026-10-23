@@ -157,6 +157,7 @@ export function createApi(opts: ApiOptions): http.Server {
       loop.reset({
         ...(typeof body.system === "string" && { system: body.system }),
         ...(typeof body.next === "string" && { next: body.next }),
+        clean: body.clean === true,
       }),
     ),
   );

@@ -6,6 +6,8 @@
 // prompt the agent set with set_next_prompt, or the same one. The context is
 // saved after every change, so a restart resumes it.
 
+import * as fs from "node:fs";
+import * as path from "node:path";
 import type { LoopStatus } from "../api/types.ts";
 import type { ChatModel, ToolCall, ToolDef } from "../llm/model.ts";
 import { recoverToolCalls } from "../llm/textcalls.ts";
@@ -75,10 +77,16 @@ export class Loop {
     };
   }
 
+  /** Whether the loop was running when five last stopped: it resumes at the next start. */
+  get wasRunning(): boolean {
+    return this.o.state.getMeta("running") === "1";
+  }
+
   /** Loop: one turn after another until paused. */
   start(): void {
     if (this.running) return;
     this.running = true;
+    this.o.state.setMeta("running", "1");
     this.failures = 0;
     this.emit({ type: "loop", state: "started" });
     this.o.log.info("loop started", { turn: this.ctx.turn });
@@ -89,6 +97,7 @@ export class Loop {
 
   /** Stop looping once the current turn ends. */
   pause(): void {
+    this.o.state.setMeta("running", "0");
     if (!this.running) return;
     this.running = false;
     this.wait?.abort();
@@ -117,9 +126,14 @@ export class Loop {
     this.o.log.info("context changed", { by: "user", change });
   }
 
-  /** Start over: the seed system prompt and prompt (or those given), no messages, turn 0, no events. */
-  reset(opts: { system?: string; next?: string } = {}): void {
+  /**
+   * Start over: the seed system prompt and prompt (or those given), no
+   * messages, turn 0, no events. With `clean`, also every tool the agent built
+   * and every file in the workspace but five's own data (.five).
+   */
+  reset(opts: { system?: string; next?: string; clean?: boolean } = {}): void {
     if (this.busy) throw new Error("cannot reset during a turn; pause and wait for the turn to end");
+    if (opts.clean) this.clean();
     Object.assign(this.ctx, this.seed(), {
       ...(opts.system?.trim() && { system: opts.system }),
       ...(opts.next?.trim() && { next: opts.next }),
@@ -130,9 +144,30 @@ export class Loop {
     this.o.log.info("context reset");
   }
 
-  /** Stop, and wait for the current turn to end. */
+  /** Delete the agent's tools, background runs and workspace files. */
+  private clean(): void {
+    const { workspace, store, runs, state, log } = this.o;
+    // Run from the repo, the workspace is the repo: never delete that.
+    if (fs.existsSync(path.join(workspace, ".git"))) {
+      throw new Error(`the workspace ${workspace} is a git repository; its files are not deleted`);
+    }
+    runs.killAll(AGENT_ID);
+    const tools = store.list().map((t) => t.name);
+    for (const name of tools) store.remove(name);
+    state.db.exec("DELETE FROM runs");
+    const files = fs.readdirSync(workspace).filter((f) => f !== ".five");
+    for (const f of files) fs.rmSync(path.join(workspace, f), { recursive: true, force: true });
+    log.info("workspace cleaned", { tools: tools.length, entries: files.length });
+  }
+
+  /**
+   * End the current turn and wait for it, for five stopping. Unlike stop, the
+   * loop is not paused: a loop that was running resumes at the next start.
+   */
   async shutdown(): Promise<void> {
-    this.stop();
+    this.running = false;
+    this.wait?.abort();
+    this.abort?.abort();
     await this.driving;
     await this.current;
   }

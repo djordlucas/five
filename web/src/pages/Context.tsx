@@ -80,7 +80,7 @@ export function Context() {
         </ol>
       </section>
 
-      <Reset locked={locked} onReset={() => change(() => post('/context/reset'))} />
+      <Reset locked={locked} onReset={(clean) => change(() => post('/context/reset', { clean }))} />
     </div>
   );
 }
@@ -211,8 +211,9 @@ function MessageRow(props: {
   );
 }
 
-function Reset({ locked, onReset }: { locked: boolean; onReset: () => void }) {
+function Reset({ locked, onReset }: { locked: boolean; onReset: (clean: boolean) => void }) {
   const [sure, setSure] = useState(false);
+  const [clean, setClean] = useState(true);
   return (
     <section class={`card ${styles.reset}`}>
       <div>
@@ -221,6 +222,10 @@ function Reset({ locked, onReset }: { locked: boolean; onReset: () => void }) {
       </div>
       {sure ? (
         <div class={styles.row}>
+          <label class={styles.check}>
+            <input type="checkbox" checked={clean} onChange={(e) => setClean((e.target as HTMLInputElement).checked)} />
+            Also delete its tools and workspace files
+          </label>
           <button type="button" class={styles.action} onClick={() => setSure(false)}>
             Cancel
           </button>
@@ -230,7 +235,7 @@ function Reset({ locked, onReset }: { locked: boolean; onReset: () => void }) {
             disabled={locked}
             onClick={() => {
               setSure(false);
-              onReset();
+              onReset(clean);
             }}
           >
             Reset the context

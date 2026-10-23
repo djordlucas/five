@@ -199,3 +199,29 @@ test("seven's tools work: run_js, and define_tool then calling the tool", async 
   assert.equal(results[2], "42");
   assert.ok(model.requests[2]?.length);
 });
+
+test("a clean reset deletes the agent's tools and workspace files, but not five's data", async () => {
+  const { five, cfg } = make([
+    { calls: [["define_tool", { name: "noop", description: "Nothing.", code: "export default async () => 1" }]] },
+    { content: "ok" },
+  ]);
+  await turn(five);
+  fs.writeFileSync(path.join(cfg.workspace, "notes.txt"), "x");
+  five.loop.reset({ clean: true });
+  assert.equal(five.store.list().length, 0);
+  assert.deepEqual(fs.readdirSync(cfg.workspace), [".five"]);
+  assert.equal(five.loop.ctx.turn, 0);
+});
+
+test("whether the loop was running survives a restart; a pause is remembered too", async () => {
+  const { five, cfg } = make([]);
+  assert.equal(five.loop.wasRunning, false);
+  five.loop.start();
+  await five.close();
+  open.splice(open.indexOf(five), 1);
+  const again = createFive(cfg, scripted([]));
+  open.push(again);
+  assert.equal(again.loop.wasRunning, true);
+  again.loop.pause();
+  assert.equal(again.loop.wasRunning, false);
+});

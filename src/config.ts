@@ -28,7 +28,7 @@ export interface Config {
   runMemoryMb: number;
   /** Pause between two turns. */
   turnDelayMs: number;
-  /** Start looping as soon as five starts, instead of waiting for Start in the UI. */
+  /** Start looping as soon as five starts, even if it was paused when it last stopped. */
   autostart: boolean;
   /** Where the HTTP API and web UI listen (host:port). */
   apiAddr: string;

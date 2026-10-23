@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // five: runs the loop, with the HTTP API and web UI, until stopped.
-// The loop waits for Start in the UI unless FIVE_AUTOSTART=on.
+// The loop resumes if it was running when five last stopped; otherwise it
+// waits for Start in the UI, unless FIVE_AUTOSTART=on.
 
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -55,7 +56,7 @@ await new Promise<void>((resolve, reject) => {
 });
 log.info("api listening", { addr: cfg.apiAddr, url: `http://${host.includes(":") ? `[${host}]` : host}:${port}` });
 
-if (cfg.autostart) five.loop.start();
+if (cfg.autostart || five.loop.wasRunning) five.loop.start();
 
 let closing = false;
 async function close(code: number): Promise<void> {

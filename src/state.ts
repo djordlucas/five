@@ -126,6 +126,18 @@ export class State {
       .run(JSON.stringify(ctx));
   }
 
+  /** A small saved setting, or undefined when never set. */
+  getMeta(key: string): string | undefined {
+    const row = this.db.prepare("SELECT value FROM meta WHERE key = ?").get(key) as { value: string } | undefined;
+    return row?.value;
+  }
+
+  setMeta(key: string, value: string): void {
+    this.db
+      .prepare("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value")
+      .run(key, value);
+  }
+
   // ── events ────────────────────────────────────────────────────────────────
 
   addEvent(turn: number, body: EventBody): Event {
