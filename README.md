@@ -5,6 +5,10 @@ that reads and rewrites its own context — system prompt included — and build
 its own tools. Line seven/nine's sibling, and the most minimal of them: one
 agent, one context, one SQLite file, Ollama.
 
+![Architecture of five: the web UI and Ollama outside; in the container, the five process — HTTP API, supervisor loop, context, state, runner and tools — its child processes and the workspace](docs/architecture.png)
+
+`docs/architecture.svg` is the source; `docs/architecture.png` is it rendered at 2×.
+
 ## How it works
 
 | Part | What it does |
@@ -88,6 +92,7 @@ Context changes are refused (409) during a turn.
 | `src/api/` | the HTTP API and its shared types |
 | `web/` | the web UI |
 | `test/` | `node:test` against a scripted model |
+| `docs/` | the architecture diagram |
 
 ## Development
 
