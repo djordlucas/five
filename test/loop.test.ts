@@ -237,6 +237,7 @@ test("a near-full context puts a warning before the turn's prompt", async () => 
   assert.equal(prompts[0], SEED_PROMPT);
   assert.equal(prompts[1], SEED_PROMPT);
   assert.match(prompts[2] ?? "", /^\[five\] Your context is 700 of 1,000 tokens \(70%\)/);
+  assert.match(prompts[2] ?? "", /delete_messages with start 0 and end 3 drops them all/);
   assert.ok(prompts[2]?.endsWith(SEED_PROMPT));
   const started = five.state.eventsAfter(0, 100).filter((e) => e.type === "turn_started");
   assert.deepEqual(
@@ -294,4 +295,40 @@ test("memory notes outlive the messages they came from", async () => {
   assert.match(results[4]?.result ?? "", /^1 note:\n- plan \(\d+ characters\): Plan: count to three\.$/);
   assert.equal(results[5]?.result, "Plan: count to three.\n1, 2, 3\nDone: 1\n");
   assert.equal(results[6]?.ok, false);
+});
+
+test("end_turn with a summary folds the turn into it and sets the next prompt", async () => {
+  const { five, model } = make([
+    { content: "turn one" },
+    { calls: [["read_context", {}]] },
+    { calls: [["end_turn", { summary: "Read my context.", next: "Go on." }]] },
+    { content: "turn three" },
+  ]);
+  await turn(five);
+  await turn(five);
+  const msgs = five.loop.ctx.messages;
+  assert.deepEqual(
+    msgs.map((m) => m.role),
+    ["user", "assistant", "assistant"],
+  );
+  assert.equal(msgs[2]?.content, "[Turn 2, summarized] Read my context.");
+  assert.equal(five.loop.ctx.next, "Go on.");
+  await turn(five);
+  assert.equal(model.requests[3]?.at(-1)?.content, "Go on.");
+});
+
+test("a long result of a run is kept in a file, its start in the context", async () => {
+  const { five, cfg } = make(
+    [{ calls: [["run_js", { code: "console.log('x'.repeat(500))" }]] }, { calls: [["read_context", { full: true }]] }],
+    { FIVE_RESULT_CHARS: "100" },
+  );
+  await turn(five);
+  const results = five.state.eventsAfter(0, 100).flatMap((e) => (e.type === "tool" ? [e] : []));
+  const cut = results[0]?.result ?? "";
+  const file = /the whole result is in (results\/\S+\.txt)\]$/.exec(cut)?.[1];
+  assert.ok(file, cut);
+  assert.ok(fs.readFileSync(path.join(cfg.workspace, file), "utf8").includes("x".repeat(500)));
+  // A context tool's result is never cut this way.
+  assert.ok((results[1]?.result.length ?? 0) > 100);
+  assert.deepEqual(fs.readdirSync(path.join(cfg.workspace, "results")), [path.basename(file)]);
 });
