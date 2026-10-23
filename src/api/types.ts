@@ -16,7 +16,12 @@ export interface ToolCall {
 export type TurnEnd = "replied" | "end_turn" | "max_steps" | "stopped" | "error";
 
 export type EventBody =
-  | { type: "turn_started"; prompt: string }
+  | {
+      type: "turn_started";
+      prompt: string;
+      /** Five's warning put before the prompt: the context is near full. */
+      warning?: string;
+    }
   | {
       type: "model";
       step: number;
@@ -41,7 +46,7 @@ export type EventBody =
     }
   | { type: "turn_ended"; reason: TurnEnd; next: string; error?: string }
   | { type: "context"; by: "model" | "user"; change: string }
-  | { type: "loop"; state: "started" | "paused" };
+  | { type: "loop"; state: "started" | "paused"; reason?: string };
 
 export type Event = EventBody & { seq: number; at: string; turn: number };
 

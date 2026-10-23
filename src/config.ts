@@ -28,6 +28,10 @@ export interface Config {
   runMemoryMb: number;
   /** Pause between two turns. */
   turnDelayMs: number;
+  /** Share of the window (0–1) above which a turn's prompt starts with a warning; 0 turns it off. */
+  contextWarn: number;
+  /** Turns in a row without a tool call after which the loop pauses; 0 never. */
+  idleTurns: number;
   /** Start looping as soon as five starts, even if it was paused when it last stopped. */
   autostart: boolean;
   /** Where the HTTP API and web UI listen (host:port). */
@@ -53,6 +57,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     runTimeoutMs: int(env.FIVE_RUN_TIMEOUT_MS, 60_000),
     runMemoryMb: int(env.FIVE_RUN_MEMORY_MB, 1024),
     turnDelayMs: int(env.FIVE_TURN_DELAY_MS, 1000),
+    contextWarn: Math.min(int(env.FIVE_CONTEXT_WARN, 60), 100) / 100,
+    idleTurns: int(env.FIVE_IDLE_TURNS, 3),
     autostart: flag(env.FIVE_AUTOSTART, "FIVE_AUTOSTART"),
     apiAddr: env.FIVE_API_ADDR ?? "127.0.0.1:5555",
     logLevel: parseLevel(env.FIVE_LOG_LEVEL, "info"),

@@ -10,10 +10,12 @@ agent, one context, one SQLite file, Ollama.
 | Part | What it does |
 |---|---|
 | The loop | Each turn appends the **next prompt** to the context as a user message and sends the whole context to the model. The model makes as many tool calls as it likes (up to `FIVE_MAX_STEPS` model calls); the turn ends when it replies without a call or calls `end_turn`. The next turn starts with the prompt the agent set with `set_next_prompt`, or the same one again. |
-| The context | The system prompt, every message of every turn, and the next prompt. All of it is the agent's to change. Five adds nothing to it: messages pile up until the agent deletes them, and Ollama silently drops the oldest text when the window (`FIVE_CONTEXT_TOKENS`) is full. |
+| The context | The system prompt, every message of every turn, and the next prompt. All of it is the agent's to change. Messages pile up until the agent deletes them, and Ollama silently drops the oldest text when the window (`FIVE_CONTEXT_TOKENS`) is full. |
+| Guards | Five adds to the context in one case only: when the last model call used more than `FIVE_CONTEXT_WARN` percent of the window, the turn's prompt starts with a warning telling the agent to delete messages. And when `FIVE_IDLE_TURNS` turns in a row end without a single tool call — a full window leaves a small model replying in place — five pauses the loop. |
 | Context tools | `read_context`, `set_system_prompt`, `edit_system_prompt`, `edit_message`, `insert_message`, `delete_messages`, `set_next_prompt`, `end_turn`. A change applies from the next model call. |
+| Memory | `memory_write` and `memory_read`: notes the agent saves as `<workspace>/memory/<name>.md` and reads back in later turns — what outlives the context. The seed teaches it to start each turn with `memory_read` and save results as it goes. |
 | seven's tools | `run_js`, `define_tool`, `read_tool`, `delete_tool`, `tool_health`, `disable_tool`, `enable_tool`, `start_tool`, `run_status`, `wait_run`, `kill_run`, `list_runs`, `sql` — and every tool the agent builds. Each run is its own Node.js child process with all of Node and npm, and **no permission model**. In a run, `five.llm.chat`, `five.db` and `five.tools.<name>` reach back into five. |
-| The seed | A new or reset context starts from `src/agent/prompt.ts`: a system prompt with a goal (a 12-chapter novella, one chapter a turn), an end-of-turn routine for keeping the context (record state in the system prompt, delete spent messages, write lessons, set the next prompt), and empty `## State` and `## Lessons` sections. Edit it there, or edit the live system prompt in the UI. |
+| The seed | A new or reset context starts from `src/agent/prompt.ts`: a system prompt with a goal (a 12-chapter novella, one chapter a turn), how to use its memory, an end-of-turn routine (save to memory, delete spent messages, write lessons, set the next prompt), and empty `## State` and `## Lessons` sections. Edit it there, or edit the live system prompt in the UI. |
 | The model | Ollama, `qwen3.5:9b` by default. Tool calls a small model writes as text are recovered. `FIVE_THINK=on` lets a thinking model think; the UI shows its thinking. |
 | State | `<workspace>/.five/five.db`: the context, the event log, built tools, background runs, and whether the loop was running. A restart resumes the context, and resumes the loop if it was running; a turn cut off by the restart ends as `stopped`. |
 
@@ -46,6 +48,8 @@ only; `.env.example` lists every variable:
 | `FIVE_MAX_STEPS` | `30` | model calls per turn |
 | `FIVE_TURN_DELAY_MS` | `1000` | pause between turns |
 | `FIVE_AUTOSTART` | `off` | start looping at startup even if it was paused |
+| `FIVE_CONTEXT_WARN` | `60` | percent of the window above which a turn's prompt starts with a warning; `0` off |
+| `FIVE_IDLE_TURNS` | `3` | turns in a row without a tool call that pause the loop; `0` never |
 | `FIVE_RUN_TIMEOUT_MS`, `FIVE_RUN_MEMORY_MB` | `60000`, `1024` | limits of one code run |
 | `FIVE_API_ADDR` | `127.0.0.1:5555` (Docker: `0.0.0.0:5555`) | where the API and UI listen |
 | `FIVE_PUBLISH` | `0.0.0.0` | Docker: host interface port 5555 is published on |
@@ -94,8 +98,9 @@ and the web UI's typecheck. Nothing in the tests calls a model.
 - **No sign-in.** Docker publishes port 5555 on every interface: anyone who
   reaches it can drive the agent, and the agent runs arbitrary code.
   `FIVE_PUBLISH=127.0.0.1` keeps it local.
-- **No context management by five.** Overflow is the agent's to prevent; the UI
-  shows the last call's prompt tokens against the window.
+- **No context management by five.** Overflow is the agent's to prevent; five
+  only warns it to save to memory and delete messages, and the UI shows the last call's prompt tokens against the
+  window.
 - **A clean reset refuses a workspace that is a git repository**, so running
   from the repo cannot delete it; it then deletes nothing.
 - One five per workspace; nothing prevents a second.

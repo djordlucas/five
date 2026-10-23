@@ -5,6 +5,10 @@
 // a call, calls end_turn, or runs out of steps. The next turn starts with the
 // prompt the agent set with set_next_prompt, or the same one. The context is
 // saved after every change, so a restart resumes it.
+//
+// Five keeps out of the context but for two guards: when the last call filled
+// most of the window, the turn's prompt starts with a warning; and turns that
+// end without a single tool call, several in a row, pause the loop.
 
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -41,6 +45,10 @@ export interface LoopOptions {
   contextTokens: number;
   maxSteps: number;
   turnDelayMs: number;
+  /** Share of the window above which a turn's prompt starts with a warning; 0 never. */
+  contextWarn?: number;
+  /** Turns in a row without a tool call after which the loop pauses; 0 never. */
+  idleTurns?: number;
   log?: Logger;
   onEvent?: (e: Event) => void;
 }
@@ -53,6 +61,8 @@ export class Loop {
   private step = 0;
   private promptTokens: number | null = null;
   private failures = 0;
+  /** Turns in a row that ended without a tool call. */
+  private idle = 0;
   private retryAt: number | null = null;
   private abort?: AbortController;
   /** Interrupts the wait between turns. */
@@ -88,6 +98,7 @@ export class Loop {
     this.running = true;
     this.o.state.setMeta("running", "1");
     this.failures = 0;
+    this.idle = 0;
     this.emit({ type: "loop", state: "started" });
     this.o.log.info("loop started", { turn: this.ctx.turn });
     this.driving ??= this.drive().finally(() => {
@@ -95,14 +106,14 @@ export class Loop {
     });
   }
 
-  /** Stop looping once the current turn ends. */
-  pause(): void {
+  /** Stop looping once the current turn ends; the reason, when five pauses itself. */
+  pause(reason?: string): void {
     this.o.state.setMeta("running", "0");
     if (!this.running) return;
     this.running = false;
     this.wait?.abort();
-    this.emit({ type: "loop", state: "paused" });
-    this.o.log.info("loop paused", { turn: this.ctx.turn, busy: this.busy });
+    this.emit({ type: "loop", state: "paused", ...(reason && { reason }) });
+    this.o.log.info("loop paused", { turn: this.ctx.turn, busy: this.busy, ...(reason && { reason }) });
   }
 
   /** Pause, and end the current turn now. */
@@ -187,6 +198,11 @@ export class Loop {
     while (this.running) {
       const ok = await this.turn();
       if (!this.running) break;
+      const { idleTurns = 0 } = this.o;
+      if (idleTurns > 0 && this.idle >= idleTurns) {
+        this.pause(`${this.idle} turns in a row ended without a tool call`);
+        break;
+      }
       this.failures = ok ? 0 : this.failures + 1;
       const delay = ok
         ? this.o.turnDelayMs
@@ -214,13 +230,15 @@ export class Loop {
     const log = this.o.log.child({ turn });
     const started = performance.now();
     const prompt = ctx.next;
-    ctx.messages.push({ role: "user", content: prompt });
+    const warning = this.contextWarning();
+    ctx.messages.push({ role: "user", content: warning ? `${warning}\n\n${prompt}` : prompt });
     this.save();
-    this.emit({ type: "turn_started", prompt });
+    this.emit({ type: "turn_started", prompt, ...(warning && { warning }) });
     log.info("turn started", { ...(log.enabled("debug") && { prompt: preview(prompt) }) });
 
     let reason: TurnEnd = "max_steps";
     let error: string | undefined;
+    let calls = 0;
     try {
       for (this.step = 1; this.step <= this.o.maxSteps; this.step++) {
         const step = this.step;
@@ -264,6 +282,7 @@ export class Loop {
           break;
         }
 
+        calls += message.tool_calls.length;
         let end = false;
         for (const call of message.tool_calls) {
           const t1 = performance.now();
@@ -300,6 +319,7 @@ export class Loop {
       this.step = 0;
       this.busy = false;
       this.abort = undefined;
+      this.idle = reason === "replied" && calls === 0 ? this.idle + 1 : 0;
       this.save();
       this.emit({ type: "turn_ended", reason, next: ctx.next, ...(error && { error }) });
       log[reason === "error" ? "error" : "info"]("turn ended", {
@@ -311,6 +331,15 @@ export class Loop {
         ...(error && { error }),
       });
     }
+  }
+
+  /** The warning a turn's prompt starts with when the last call filled most of the window. */
+  private contextWarning(): string | undefined {
+    const { contextWarn = 0, contextTokens } = this.o;
+    const used = this.promptTokens;
+    if (contextWarn <= 0 || used === null || used < contextWarn * contextTokens) return undefined;
+    const share = Math.round((100 * used) / contextTokens);
+    return `[five] Your context is ${used.toLocaleString("en-US")} of ${contextTokens.toLocaleString("en-US")} tokens (${share}%). When it is full the oldest text is silently lost and you can no longer work. Before anything else, save what you still need with memory_write, then call read_context and delete_messages you no longer need.`;
   }
 
   /** Every tool the agent can call now: its context tools, seven's built-ins, and the enabled tools it built. */
@@ -378,6 +407,7 @@ export class Loop {
       ctx: this.ctx,
       ...(this.promptTokens !== null && { promptTokens: this.promptTokens }),
       contextTokens: this.o.contextTokens,
+      workspace: this.o.workspace,
       changed: (change) => {
         this.emit({ type: "context", by: "model", change });
         this.o.log.info("context changed", { by: "model", change });

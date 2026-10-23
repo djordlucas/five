@@ -10,7 +10,7 @@ import { createFive, type Five } from "../src/app.ts";
 import { loadConfig } from "../src/config.ts";
 import type { ChatModel, Completion, CompletionRequest, Message } from "../src/llm/model.ts";
 
-type Reply = { content?: string; calls?: [string, Record<string, unknown>][] };
+type Reply = { content?: string; calls?: [string, Record<string, unknown>][]; tokens?: number };
 
 /** A model that gives the scripted replies in order, and records every request. */
 function scripted(replies: Reply[]): ChatModel & { requests: Message[][] } {
@@ -33,7 +33,7 @@ function scripted(replies: Reply[]): ChatModel & { requests: Message[][] } {
             })),
           }),
         },
-        usage: { prompt_tokens: 100, completion_tokens: 10, total_tokens: 110 },
+        usage: { prompt_tokens: r.tokens ?? 100, completion_tokens: 10, total_tokens: (r.tokens ?? 100) + 10 },
       };
     },
   };
@@ -44,9 +44,9 @@ afterEach(async () => {
   for (const f of open.splice(0)) await f.close();
 });
 
-function make(replies: Reply[]) {
+function make(replies: Reply[], env: Record<string, string> = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "five-test-"));
-  const cfg = loadConfig({ FIVE_WORKSPACE: dir, FIVE_TURN_DELAY_MS: "0", FIVE_MAX_STEPS: "5" });
+  const cfg = loadConfig({ FIVE_WORKSPACE: dir, FIVE_TURN_DELAY_MS: "0", FIVE_MAX_STEPS: "5", ...env });
   const model = scripted(replies);
   const five = createFive(cfg, model);
   open.push(five);
@@ -224,4 +224,74 @@ test("whether the loop was running survives a restart; a pause is remembered too
   assert.equal(again.loop.wasRunning, true);
   again.loop.pause();
   assert.equal(again.loop.wasRunning, false);
+});
+
+test("a near-full context puts a warning before the turn's prompt", async () => {
+  const { five, model } = make([{ content: "a", tokens: 500 }, { content: "b", tokens: 700 }, { content: "c" }], {
+    FIVE_CONTEXT_TOKENS: "1000",
+  });
+  await turn(five);
+  await turn(five);
+  await turn(five);
+  const prompts = model.requests.map((r) => r.at(-1)?.content as string);
+  assert.equal(prompts[0], SEED_PROMPT);
+  assert.equal(prompts[1], SEED_PROMPT);
+  assert.match(prompts[2] ?? "", /^\[five\] Your context is 700 of 1,000 tokens \(70%\)/);
+  assert.ok(prompts[2]?.endsWith(SEED_PROMPT));
+  const started = five.state.eventsAfter(0, 100).filter((e) => e.type === "turn_started");
+  assert.deepEqual(
+    started.map((e) => e.type === "turn_started" && e.prompt),
+    [SEED_PROMPT, SEED_PROMPT, SEED_PROMPT],
+  );
+  assert.ok(started[2]?.type === "turn_started" && started[2].warning);
+});
+
+test("turns in a row without a tool call pause the loop", async () => {
+  const { five } = make(
+    [
+      { content: "idle" },
+      { calls: [["read_context", {}]] },
+      { content: "idle" },
+      { content: "idle" },
+      { content: "idle" },
+    ],
+    { FIVE_IDLE_TURNS: "2" },
+  );
+  five.loop.start();
+  while (five.loop.status().running || five.loop.status().busy) await new Promise((r) => setTimeout(r, 5));
+  // The call in turn 2 reset the count: turns 3 and 4 paused it.
+  assert.equal(five.loop.ctx.turn, 4);
+  assert.equal(five.loop.wasRunning, false);
+  const paused = five.state.eventsAfter(0, 100).find((e) => e.type === "loop" && e.state === "paused");
+  assert.equal(paused?.type === "loop" && paused.reason, "2 turns in a row ended without a tool call");
+});
+
+test("memory notes outlive the messages they came from", async () => {
+  const { five, cfg } = make([
+    {
+      calls: [
+        ["memory_write", { name: "plan", text: "Plan: count to three.\n1, 2, 3" }],
+        ["memory_write", { name: "plan", text: "Done: 1", append: true }],
+        ["memory_write", { name: "../escape", text: "no" }],
+        ["delete_messages", { start: 0, end: 0 }],
+      ],
+    },
+    {
+      calls: [
+        ["memory_read", {}],
+        ["memory_read", { name: "plan" }],
+        ["memory_read", { name: "nope" }],
+      ],
+    },
+    { content: "ok" },
+  ]);
+  await turn(five);
+  const file = path.join(cfg.workspace, "memory", "plan.md");
+  assert.equal(fs.readFileSync(file, "utf8"), "Plan: count to three.\n1, 2, 3\nDone: 1\n");
+  assert.deepEqual(fs.readdirSync(path.join(cfg.workspace, "memory")), ["plan.md"]);
+  const results = five.state.eventsAfter(0, 100).flatMap((e) => (e.type === "tool" ? [e] : []));
+  assert.equal(results[2]?.ok, false);
+  assert.match(results[4]?.result ?? "", /^1 note:\n- plan \(\d+ characters\): Plan: count to three\.$/);
+  assert.equal(results[5]?.result, "Plan: count to three.\n1, 2, 3\nDone: 1\n");
+  assert.equal(results[6]?.ok, false);
 });

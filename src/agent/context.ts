@@ -1,8 +1,11 @@
 // The context tools: the agent reads and rewrites everything it is sent —
 // the system prompt, every message, and the prompt that starts its next turn.
 // A change applies from the next model call; nothing else keeps a copy, so
-// what the agent deletes is gone.
+// what the agent deletes is gone — but for its memory: notes it saves as files
+// in <workspace>/memory, to read back in any later turn.
 
+import * as fs from "node:fs";
+import * as path from "node:path";
 import type { Message, ToolDef } from "../llm/model.ts";
 import type { Context } from "../state.ts";
 
@@ -15,6 +18,8 @@ export interface ContextEnv {
   /** Prompt tokens of the last model call, when known. */
   promptTokens?: number;
   contextTokens: number;
+  /** Where the memory directory lives. */
+  workspace: string;
   /** Records a change for the event log. */
   changed(change: string): void;
   /** Ends the turn once this step's calls are done. */
@@ -23,6 +28,9 @@ export interface ContextEnv {
 
 /** Characters of each message read_context shows unless asked for full text. */
 const PREVIEW_CHARS = 200;
+/** The memory directory, in the workspace. */
+export const MEMORY_DIR = "memory";
+const NOTE_NAME = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
 export const contextTools: ContextTool[] = [
   {
@@ -184,6 +192,74 @@ export const contextTools: ContextTool[] = [
     },
   },
   {
+    name: "memory_write",
+    description:
+      "Save a note to your memory, which outlives your context: a file memory/<name>.md in the workspace. It " +
+      "replaces the note of that name, or adds to its end with append=true; empty text deletes it. Save anything " +
+      "you will need later before you delete the messages it is in.",
+    parameters: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Lowercase letters, digits, - and _: e.g. plan, progress, lessons." },
+        text: { type: "string", description: "Markdown. Make the first line a summary: memory_read lists it." },
+        append: { type: "boolean", description: "Add to the end of the note instead of replacing it." },
+      },
+      required: ["name", "text"],
+    },
+    run(a, env) {
+      const name = String(a.name).replace(/\.md$/, "");
+      if (!NOTE_NAME.test(name)) return `error: "${name}" is not a note name: use lowercase letters, digits, - and _`;
+      const file = notePath(env, name);
+      const text = String(a.text);
+      if (!text.trim() && a.append !== true) {
+        if (!fs.existsSync(file)) return `error: there is no note "${name}"`;
+        fs.rmSync(file);
+        env.changed(`note ${name} deleted`);
+        return `note "${name}" deleted`;
+      }
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      if (a.append === true) fs.appendFileSync(file, text.endsWith("\n") ? text : `${text}\n`);
+      else fs.writeFileSync(file, text.endsWith("\n") ? text : `${text}\n`);
+      const size = fs.statSync(file).size;
+      env.changed(`note ${name} ${a.append === true ? "appended to" : "saved"}`);
+      return `note "${name}" ${a.append === true ? "appended to" : "saved"}: ${size} bytes in ${MEMORY_DIR}/${name}.md`;
+    },
+  },
+  {
+    name: "memory_read",
+    description:
+      "Read your memory: without a name, the list of your notes with their first lines; with a name, that note.",
+    parameters: {
+      type: "object",
+      properties: { name: { type: "string", description: "The note to read. Default: list them all." } },
+    },
+    run(a, env) {
+      if (a.name === undefined || a.name === "") {
+        const dir = path.join(env.workspace, MEMORY_DIR);
+        const names = fs.existsSync(dir)
+          ? fs
+              .readdirSync(dir)
+              .filter((f) => f.endsWith(".md"))
+              .map((f) => f.slice(0, -3))
+              .sort()
+          : [];
+        if (names.length === 0) return "Your memory is empty. memory_write saves a note.";
+        return [
+          `${names.length} note${names.length === 1 ? "" : "s"}:`,
+          ...names.map((n) => {
+            const text = fs.readFileSync(notePath(env, n), "utf8");
+            return `- ${n} (${text.length} characters): ${clip(text.split("\n", 1)[0] ?? "", 120)}`;
+          }),
+        ].join("\n");
+      }
+      const name = String(a.name).replace(/\.md$/, "");
+      if (!NOTE_NAME.test(name) || !fs.existsSync(notePath(env, name))) {
+        return `error: there is no note "${name}"; memory_read without a name lists them`;
+      }
+      return fs.readFileSync(notePath(env, name), "utf8");
+    },
+  },
+  {
     name: "end_turn",
     description:
       "End this turn after this step's calls. Replying without any tool call ends it too. The next turn starts with the next prompt.",
@@ -203,6 +279,10 @@ function label(m: Message): string {
     return `assistant, calling ${m.tool_calls.map((c) => `${c.function.name} ${clip(c.function.arguments, 120)}`).join("; ")}`;
   }
   return m.role;
+}
+
+function notePath(env: ContextEnv, name: string): string {
+  return path.join(env.workspace, MEMORY_DIR, `${name}.md`);
 }
 
 function clip(s: string, n = PREVIEW_CHARS): string {

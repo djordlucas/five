@@ -149,6 +149,7 @@ function TurnView({ t }: { t: Turn }) {
           <span class="muted">{clock(t.started.at)}</span>
         </header>
       )}
+      {t.started?.warning && <p class={`${styles.line} ${styles.warn}`}>⚠ {t.started.warning}</p>}
       {prompt !== undefined && <div class={styles.prompt}>{prompt}</div>}
       {t.items.map((e) => {
         switch (e.type) {
@@ -163,7 +164,8 @@ function TurnView({ t }: { t: Turn }) {
           case 'loop':
             return (
               <p key={e.seq} class={styles.line}>
-                Loop {e.state} · {clock(e.at)}
+                Loop {e.state}
+                {e.reason && `: ${e.reason}`} · {clock(e.at)}
               </p>
             );
         }

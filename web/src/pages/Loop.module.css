@@ -165,6 +165,10 @@
   display: grid;
 }
 
+.warn {
+  color: var(--warn);
+}
+
 .next {
   overflow-wrap: anywhere;
 }
