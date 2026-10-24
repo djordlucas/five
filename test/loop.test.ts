@@ -57,13 +57,14 @@ afterEach(async () => {
 
 function make(replies: Reply[], env: Record<string, string> = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "five-test-"));
-  // The idle guard and the trim are off unless a test is about them.
+  // The idle guard, the trim and folding replies are off unless a test is about them.
   const cfg = loadConfig({
     FIVE_WORKSPACE: dir,
     FIVE_TURN_DELAY_MS: "0",
     FIVE_MAX_STEPS: "5",
     FIVE_IDLE_TURNS: "0",
     FIVE_CONTEXT_TRIM: "0",
+    FIVE_FOLD_REPLIES: "off",
     ...env,
   });
   const model = scripted(replies);
@@ -584,4 +585,30 @@ test("a nearly full context has its oldest messages dropped before the turn", as
   assert.equal(sent[1]?.role, "assistant");
   const change = five.state.eventsAfter(0, 100).find((e) => e.type === "context" && e.by === "five");
   assert.ok(change);
+});
+
+test("a turn that ends with a reply is folded into it", async () => {
+  const { five } = make(
+    [
+      { calls: [["read_context", {}]] },
+      { content: "Read my context and found it empty." },
+      { calls: [["end_turn", { summary: "Ended.", next: "Go on." }]] },
+      { content: "  " },
+    ],
+    { FIVE_FOLD_REPLIES: "on" },
+  );
+  await turn(five);
+  assert.deepEqual(
+    five.loop.ctx.messages.map((m) => m.content),
+    ["[Turn 1, summarized] Read my context and found it empty."],
+  );
+  await turn(five);
+  await turn(five);
+  // end_turn's summary wins; an empty reply leaves the turn as it is.
+  const msgs = five.loop.ctx.messages;
+  assert.equal(msgs[1]?.content, "[Turn 2, summarized] Ended.");
+  assert.deepEqual(
+    msgs.slice(2).map((m) => m.role),
+    ["user", "assistant"],
+  );
 });
