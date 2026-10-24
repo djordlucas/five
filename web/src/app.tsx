@@ -5,6 +5,7 @@ import { startPolling, stopPolling } from './live';
 import { Context } from './pages/Context';
 import { Loop } from './pages/Loop';
 import { NotFound } from './pages/NotFound';
+import { Processes } from './pages/Processes';
 import { Tools } from './pages/Tools';
 import { Workspace } from './pages/Workspace';
 
@@ -23,6 +24,7 @@ export function App() {
           <Route path="/tools/:name" component={Tools} />
           <Route path="/tools" component={Tools} />
           <Route path="/workspace" component={Workspace} />
+          <Route path="/processes" component={Processes} />
           <Route default component={NotFound} />
         </Router>
       </Shell>

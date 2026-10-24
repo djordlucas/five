@@ -216,6 +216,24 @@ export function createApi(opts: ApiOptions): http.Server {
     };
   });
 
+  // ── child processes ─────────────────────────────────────────────────────
+  route("GET", "/api/v1/processes", () => ({ processes: five.processes.list() }));
+  route("GET", "/api/v1/processes/:id", ({ params }) => {
+    const p = five.processes.get(params.id ?? "");
+    if (!p) throw new HttpError(404, `no process ${params.id}`);
+    return p;
+  });
+  route("POST", "/api/v1/processes/:id/kill", ({ params }) => {
+    const id = params.id ?? "";
+    if (!five.processes.kill(id)) {
+      throw new HttpError(
+        five.processes.get(id) ? 409 : 404,
+        five.processes.get(id) ? `${id} has ended` : `no process ${id}`,
+      );
+    }
+    return five.processes.get(id);
+  });
+
   // ── the workspace ───────────────────────────────────────────────────────
   const workspace = new Workspace(cfg.workspace);
   const wsPath = (query: URLSearchParams) => query.get("path") ?? "";

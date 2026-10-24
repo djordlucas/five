@@ -11,6 +11,8 @@ import type {
   DbRows,
   DbTable,
   EventsPage,
+  ProcessDetail,
+  ProcessInfo,
   Status,
   WorkspaceDir,
   WorkspaceEntry,
@@ -486,6 +488,40 @@ test("the workspace API reads and writes files and databases, and keeps out of .
     assert.equal((await rm("notes/a.md", { "if-match": version })).status, 409);
     assert.equal((await rm("notes/a.md")).status, 200);
     assert.equal((await rm("notes")).status, 200);
+  } finally {
+    server.close();
+  }
+});
+
+test("every child process is recorded, with its source, output and result, and a live one can be killed", async () => {
+  const { five, cfg } = make([
+    { calls: [["run_js", { code: "console.log('hi'); export default 6 * 7" }]] },
+    { calls: [["start_tool", { tool: "run_js", args: { code: "await new Promise((r) => setTimeout(r, 60000))" } }]] },
+    { content: "ok" },
+  ]);
+  await turn(five);
+  const server = createApi({ five, cfg, log: (await import("../src/log.ts")).noopLogger });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}/api/v1/processes`;
+  try {
+    const list = ((await (await fetch(base)).json()) as { processes: ProcessInfo[] }).processes;
+    assert.equal(list.length, 2);
+    const [bg, done] = list as [ProcessInfo, ProcessInfo];
+    assert.deepEqual([done.kind, done.label, done.state, done.turn, done.step], ["code", "run_js", "ok", 1, 1]);
+    assert.deepEqual([bg.runId, bg.step], ["r1", 2]);
+    assert.ok(bg.state === "installing" || bg.state === "running", bg.state);
+    const detail = (await (await fetch(`${base}/${done.id}`)).json()) as ProcessDetail;
+    assert.deepEqual(detail.logs, ["hi"]);
+    assert.equal(detail.value, 42);
+    assert.match(detail.source, /console\.log\('hi'\)/);
+
+    const json = { "content-type": "application/json" };
+    const killed = await fetch(`${base}/${bg.id}/kill`, { method: "POST", headers: json, body: "{}" });
+    assert.equal(killed.status, 200);
+    await five.runs.settled("r1");
+    const after = (await (await fetch(`${base}/${bg.id}`)).json()) as ProcessDetail;
+    assert.equal(after.state, "killed");
+    assert.equal((await fetch(`${base}/${bg.id}/kill`, { method: "POST", headers: json, body: "{}" })).status, 409);
   } finally {
     server.close();
   }

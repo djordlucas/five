@@ -33,12 +33,12 @@
 
   <!-- Outside: browser and Ollama -->
   <rect class="ext" x="40" y="110" width="460" height="140" rx="10"/>
-  <text class="h" x="60" y="138">Web UI · web/ (Preact + Vite)</text>
-  <text class="s" x="60" y="161">Loop — controls, window meter, every turn live</text>
-  <text class="s" x="60" y="180">Context — edit the prompts and messages, start over</text>
-  <text class="s" x="60" y="199">Tools — what the agent built, with source</text>
-  <text class="s" x="60" y="218">Workspace — its files and databases, read and edit</text>
-  <text class="m" x="60" y="240">your browser · served by five from web/dist</text>
+  <text class="h" x="60" y="136">Web UI · web/ (Preact + Vite), served by five</text>
+  <text class="s" x="60" y="160">Loop — controls, window meter, every turn live</text>
+  <text class="s" x="60" y="179">Context — edit the prompts and messages, start over</text>
+  <text class="s" x="60" y="198">Tools — what the agent built, with source</text>
+  <text class="s" x="60" y="217">Workspace — its files and databases, read and edit</text>
+  <text class="s" x="60" y="236">Processes — every child process: output, result, kill</text>
 
   <rect class="ext" x="1180" y="110" width="380" height="140" rx="10"/>
   <text class="h" x="1200" y="138">Ollama · on the host</text>
@@ -67,7 +67,7 @@
   <text class="h" x="98" y="398">HTTP API · src/api/server.ts</text>
   <text class="s" x="98" y="422">loop: start · pause · stop · step</text>
   <text class="s" x="98" y="442">context: read · edit · reset (clean) — refused during a turn</text>
-  <text class="s" x="98" y="462">status · events · tools · workspace files and databases</text>
+  <text class="s" x="98" y="462">status · events · tools · processes · workspace</text>
 
   <!-- Loop -->
   <rect class="loop" x="80" y="492" width="520" height="408" rx="8"/>
@@ -126,7 +126,8 @@
   <text class="s" x="678" y="810">bundles with esbuild, installs npm packages</text>
   <text class="s" x="678" y="832">one Node child process per run</text>
   <text class="s" x="678" y="854">timeout 60 s · heap 1 GB · no permission model</text>
-  <text class="m" x="678" y="880">background runs: start_tool · wait_run · kill_run</text>
+  <text class="m" x="678" y="872">background runs: start_tool · wait_run · kill_run</text>
+  <text class="m" x="678" y="890">every process recorded: src/agent/processes.ts</text>
 
   <!-- Tools -->
   <rect class="box" x="80" y="920" width="1000" height="258" rx="8"/>

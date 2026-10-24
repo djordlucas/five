@@ -3,11 +3,12 @@
 
 import * as path from "node:path";
 import { Loop } from "./agent/loop.ts";
+import { ProcessTable } from "./agent/processes.ts";
 import { RunTable } from "./agent/runs.ts";
 import type { Config } from "./config.ts";
 import type { ChatModel } from "./llm/model.ts";
 import { type Logger, noopLogger } from "./log.ts";
-import { createRunner, llmModule, type Runner, toolsModule } from "./runner/index.ts";
+import { createRunner, llmModule, type RunHandle, type Runner, toolsModule } from "./runner/index.ts";
 import { State } from "./state.ts";
 import { ToolStore } from "./tools/store.ts";
 
@@ -16,6 +17,8 @@ export interface Five {
   store: ToolStore;
   runner: Runner;
   runs: RunTable;
+  /** Every child process started since five started. */
+  processes: ProcessTable;
   loop: Loop;
   close(): Promise<void>;
 }
@@ -26,18 +29,23 @@ export function createFive(cfg: Config, model: ChatModel, log: Logger = noopLogg
   if (lost > 0) log.warn("background runs lost at restart", { count: lost });
   const store = new ToolStore(state, path.join(cfg.home, "tools"));
   const runnerLog = log.child({ component: "runner" });
-  const runner: Runner = createRunner({
-    home: cfg.home,
-    cwd: cfg.workspace,
-    timeoutMs: cfg.runTimeoutMs,
-    memoryMb: cfg.runMemoryMb,
-    host: { llm: llmModule(model), tools: toolsModule(store, () => runner, runnerLog) },
-    // How five.db() in a run knows which database to refuse.
-    env: { FIVE_STATE_DB: state.path },
-    log: runnerLog,
-  });
-  const runs = new RunTable(state, log);
-  const loop = new Loop({
+  // The loop is made below; a process only starts once it runs.
+  let loop: Loop | undefined;
+  const processes = new ProcessTable(cfg.home, () => ({ turn: loop?.ctx.turn ?? 0, step: loop?.status().step ?? 0 }));
+  const runner: Runner = processes.watch(
+    createRunner({
+      home: cfg.home,
+      cwd: cfg.workspace,
+      timeoutMs: cfg.runTimeoutMs,
+      memoryMb: cfg.runMemoryMb,
+      host: { llm: llmModule(model), tools: toolsModule(store, () => runner, runnerLog) },
+      // How five.db() in a run knows which database to refuse.
+      env: { FIVE_STATE_DB: state.path },
+      log: runnerLog,
+    }),
+  );
+  const runs = new TaggedRunTable(state, log, processes);
+  loop = new Loop({
     state,
     store,
     runner,
@@ -58,6 +66,7 @@ export function createFive(cfg: Config, model: ChatModel, log: Logger = noopLogg
     store,
     runner,
     runs,
+    processes,
     loop,
     async close() {
       await loop.shutdown();
@@ -65,4 +74,18 @@ export function createFive(cfg: Config, model: ChatModel, log: Logger = noopLogg
       state.close();
     },
   };
+}
+
+/** seven's run table, marking each background run's process with its run id. */
+class TaggedRunTable extends RunTable {
+  private readonly processes: ProcessTable;
+  constructor(state: State, log: Logger, processes: ProcessTable) {
+    super(state, log);
+    this.processes = processes;
+  }
+  override add(agent: string, tool: string, handle: RunHandle): string {
+    const id = super.add(agent, tool, handle);
+    this.processes.tag(handle.id, id);
+    return id;
+  }
 }

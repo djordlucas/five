@@ -1,0 +1,22 @@
+.part {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.part h3 {
+  margin: 0;
+  font-size: var(--text-sm);
+}
+
+.failed {
+  color: var(--danger);
+}
+
+.output {
+  max-height: 50vh;
+}
+
+.code {
+  max-height: 60vh;
+}

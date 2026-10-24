@@ -164,3 +164,35 @@ export interface DbResult {
   changes: number;
   lastInsertRowid: number | null;
 }
+
+/** A child process five started: one run of code or of a tool. */
+export interface ProcessInfo {
+  /** The runner's run id. */
+  id: string;
+  /** run_js code, a tool the agent built (also when called from inside a run), or a define_tool trial. */
+  kind: "code" | "tool" | "trial";
+  /** run_js, the tool's name, or "define_tool <name>". */
+  label: string;
+  /** The loop's turn and step when it started. */
+  turn: number;
+  step: number;
+  startedAt: string;
+  state: "installing" | "running" | "ok" | "failed" | "killed";
+  /** How long it ran, or has run so far. */
+  durationMs: number;
+  /** Output lines so far. */
+  lines: number;
+  error?: string;
+  /** Its background run's id, when started with start_tool. */
+  runId?: string;
+}
+
+export interface ProcessDetail extends ProcessInfo {
+  /** The code it runs. */
+  source: string;
+  args: unknown;
+  /** Its output, the last 2000 lines: stdout, and stderr prefixed [stderr]. */
+  logs: string[];
+  /** Its result, once it finished well. */
+  value?: unknown;
+}
