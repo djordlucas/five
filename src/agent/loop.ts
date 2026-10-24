@@ -6,9 +6,10 @@
 // prompt the agent set with set_next_prompt, or the same one. The context is
 // saved after every change, so a restart resumes it.
 //
-// Five keeps out of the context but for two guards: when the last call filled
-// most of the window, the turn's prompt starts with a warning; and turns that
-// end without a single tool call, several in a row, pause the loop. A turn the
+// Five keeps out of the context but for its guards: when the last call filled
+// most of the window, the turn's prompt starts with a warning, and when it
+// filled nearly all of it, five drops the oldest messages itself; and turns
+// that do no work, several in a row, pause the loop. A turn the
 // agent ends with a summary is folded into it, and a long result of a run is
 // kept in a file, with only its start in the context.
 
@@ -33,8 +34,12 @@ export const AGENT_ID = "five";
 
 /** A tool result longer than this is cut. */
 const MAX_RESULT_CHARS = 16_000;
+/** Tools that only read or end the turn: a turn that calls nothing else did no work. */
+const NO_WORK = new Set(["read_context", "memory_read", "set_next_prompt", "end_turn"]);
 /** Where long results of runs are kept, in the workspace. */
 export const RESULTS_DIR = "results";
+/** Share of the window a trim aims to leave the context at. */
+const TRIM_TO = 0.5;
 /** Waits after a failed turn, doubling up to the last. */
 const BACKOFF_MS = [5_000, 10_000, 30_000, 60_000];
 
@@ -51,6 +56,8 @@ export interface LoopOptions {
   turnDelayMs: number;
   /** Share of the window above which a turn's prompt starts with a warning; 0 never. */
   contextWarn?: number;
+  /** Share of the window above which five drops the oldest messages before a turn; 0 never. */
+  contextTrim?: number;
   /** Turns in a row without a tool call after which the loop pauses; 0 never. */
   idleTurns?: number;
   /** A result of a run longer than this goes to a file, its start to the context; 0 never. */
@@ -67,7 +74,7 @@ export class Loop {
   private step = 0;
   private promptTokens: number | null = null;
   private failures = 0;
-  /** Turns in a row that ended without a tool call. */
+  /** Turns in a row that did no work: no tool call beyond reading and ending the turn. */
   private idle = 0;
   /** The prompt the current turn started with. */
   private turnPrompt = "";
@@ -82,6 +89,8 @@ export class Loop {
     this.o = { log: noopLogger, ...opts, ...(opts.log && { log: opts.log.child({ component: "loop" }) }) };
     this.ctx = opts.state.loadContext() ?? this.seed();
     if (!opts.state.loadContext()) opts.state.saveContext(this.ctx);
+    // The last call's size outlives a restart, so the first turn after one is warned too.
+    this.promptTokens = Number(opts.state.getMeta("prompt_tokens")) || null;
   }
 
   status(): LoopStatus {
@@ -158,6 +167,7 @@ export class Loop {
       ...(opts.next?.trim() && { next: opts.next }),
     });
     this.promptTokens = null;
+    this.o.state.setMeta("prompt_tokens", "");
     this.o.state.clearEvents();
     this.save();
     this.o.log.info("context reset");
@@ -208,7 +218,7 @@ export class Loop {
       if (!this.running) break;
       const { idleTurns = 0 } = this.o;
       if (idleTurns > 0 && this.idle >= idleTurns) {
-        this.pause(`${this.idle} turns in a row ended without a tool call`);
+        this.pause(`${this.idle} turns in a row did no work`);
         break;
       }
       this.failures = ok ? 0 : this.failures + 1;
@@ -238,7 +248,8 @@ export class Loop {
     const log = this.o.log.child({ turn });
     const started = performance.now();
     const prompt = ctx.next;
-    const warning = [this.idleWarning(), this.contextWarning()].filter(Boolean).join("\n\n") || undefined;
+    const trimmed = this.trim();
+    const warning = [this.idleWarning(), trimmed ?? this.contextWarning()].filter(Boolean).join("\n\n") || undefined;
     this.turnPrompt = prompt;
     const opening: Message = { role: "user", content: warning ? `${warning}\n\n${prompt}` : prompt };
     ctx.messages.push(opening);
@@ -248,7 +259,7 @@ export class Loop {
 
     let reason: TurnEnd = "max_steps";
     let error: string | undefined;
-    let calls = 0;
+    let worked = false;
     try {
       for (this.step = 1; this.step <= this.o.maxSteps; this.step++) {
         const step = this.step;
@@ -263,6 +274,7 @@ export class Loop {
         });
         const durationMs = Math.round(performance.now() - t0);
         this.promptTokens = completion.usage?.prompt_tokens ?? this.promptTokens;
+        if (this.promptTokens !== null) this.o.state.setMeta("prompt_tokens", String(this.promptTokens));
         let { message } = completion;
         let fromText = false;
         if (!message.tool_calls?.length && message.content) {
@@ -292,7 +304,7 @@ export class Loop {
           break;
         }
 
-        calls += message.tool_calls.length;
+        if (message.tool_calls.some((c) => !NO_WORK.has(c.function.name))) worked = true;
         let end = false;
         let summary: string | undefined;
         for (const call of message.tool_calls) {
@@ -335,7 +347,7 @@ export class Loop {
       this.step = 0;
       this.busy = false;
       this.abort = undefined;
-      this.idle = reason === "replied" && calls === 0 ? this.idle + 1 : 0;
+      this.idle = worked || reason === "stopped" || reason === "error" ? 0 : this.idle + 1;
       this.save();
       this.emit({ type: "turn_ended", reason, next: ctx.next, ...(error && { error }) });
       log[reason === "error" ? "error" : "info"]("turn ended", {
@@ -380,10 +392,35 @@ export class Loop {
     return `${result.slice(0, resultChars)}\n… [${result.length - resultChars} more characters; the whole result is in ${rel}]`;
   }
 
-  /** The note a turn's prompt starts with after a turn that made no tool call, which left the prompt to repeat. */
+  /**
+   * When the last call filled nearly all the window, drop the oldest messages
+   * until about half of it is left, and return the note that says so. A model
+   * with a full window can no longer make the call that frees it.
+   */
+  private trim(): string | undefined {
+    const { contextTrim = 0, contextTokens } = this.o;
+    const used = this.promptTokens;
+    const { messages } = this.ctx;
+    if (contextTrim <= 0 || used === null || used < contextTrim * contextTokens || !messages.length) return undefined;
+    const sizes = messages.map(chars);
+    const total = sizes.reduce((a, b) => a + b, 0);
+    // Characters stand in for tokens: drop the share of them that is over the aim.
+    const over = total * (1 - (TRIM_TO * contextTokens) / used);
+    let cut = 0;
+    for (let dropped = 0; cut < messages.length && dropped < over; cut++) dropped += sizes[cut] ?? 0;
+    // A tool result without the call before it is no message the model can read.
+    while (messages[cut]?.role === "tool") cut++;
+    messages.splice(0, cut);
+    this.emit({ type: "context", by: "five", change: `the ${cut} oldest messages dropped to free the window` });
+    this.o.log.warn("context trimmed", { messages: cut, prompt_tokens: used });
+    const share = Math.round((100 * used) / contextTokens);
+    return `[five] Your context was ${used.toLocaleString("en-US")} of ${contextTokens.toLocaleString("en-US")} tokens (${share}%), too full to work in, so five dropped your ${cut} oldest messages. What you saved with memory_write is still there: memory_read lists it. Keep the window small from now on: end every turn with end_turn(summary, next), and delete messages you no longer need.`;
+  }
+
+  /** The note a turn's prompt starts with after a turn that did no work. */
   private idleWarning(): string | undefined {
-    if (this.idle === 0) return undefined;
-    return "[five] Your last turn made no tool call, so this prompt repeats and that turn was wasted. Do the next piece of work now. If your goal is done, rewrite ## Goal in your system prompt with a new goal and start it. End the turn with end_turn(summary, next), where next says what to do — not what was done.";
+    if (this.idle === 0 || !this.o.idleTurns) return undefined;
+    return "[five] Your last turn did no work: it called nothing beyond reading and ending the turn, so it was wasted. No user will answer or give you a request: what you do next is yours to decide. Do the next piece of work now. If your goal is done, rewrite ## Goal in your system prompt with a new goal and start it. End the turn with end_turn(summary, next), where next says what to do — not what was done, and never to wait.";
   }
 
   /** The warning a turn's prompt starts with when the last call filled most of the window. */
@@ -505,4 +542,12 @@ function isFailure(result: string): boolean {
 function truncate(s: string): string {
   if (s.length <= MAX_RESULT_CHARS) return s;
   return `${s.slice(0, MAX_RESULT_CHARS)}\n… [truncated ${s.length - MAX_RESULT_CHARS} of ${s.length} characters]`;
+}
+
+/** A message's length in characters: its text and its calls. */
+function chars(m: Message): number {
+  let n = m.content?.length ?? 0;
+  for (const c of (m.role === "assistant" && m.tool_calls) || [])
+    n += c.function.name.length + c.function.arguments.length;
+  return n;
 }

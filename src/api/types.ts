@@ -45,7 +45,7 @@ export type EventBody =
       durationMs: number;
     }
   | { type: "turn_ended"; reason: TurnEnd; next: string; error?: string }
-  | { type: "context"; by: "model" | "user"; change: string }
+  | { type: "context"; by: "model" | "user" | "five"; change: string }
   | { type: "loop"; state: "started" | "paused"; reason?: string };
 
 export type Event = EventBody & { seq: number; at: string; turn: number };
@@ -106,4 +106,93 @@ export interface ToolDetail extends ToolInfo {
 
 export interface ErrorBody {
   error: { message: string };
+}
+
+/** A file or directory in the workspace. */
+export interface WorkspaceEntry {
+  name: string;
+  /** Relative to the workspace, with / between its parts. */
+  path: string;
+  dir: boolean;
+  bytes: number;
+  modified: string;
+  /** A file's version: what If-Match sends back to write it only if unchanged. */
+  version?: string;
+  /** The file is a SQLite database. */
+  sqlite?: boolean;
+}
+
+export interface WorkspaceDir {
+  /** "" for the workspace itself. */
+  path: string;
+  /** Directories first. Five's own .five/ is not listed. */
+  entries: WorkspaceEntry[];
+}
+
+export interface DbColumn {
+  name: string;
+  type: string;
+  notNull: boolean;
+  default: string | null;
+  pk: boolean;
+}
+
+export interface DbTable {
+  name: string;
+  kind: "table" | "view";
+  columns: DbColumn[];
+  rows: number;
+  /** Rows have a rowid, so one can be changed or deleted by it. */
+  rowid: boolean;
+}
+
+export interface DbRows {
+  columns: string[];
+  rows: unknown[][];
+  /** Each row's rowid, when the table has them. */
+  rowids?: number[];
+  total: number;
+}
+
+export interface DbResult {
+  /** The statement wrote: changes and lastInsertRowid say what. Otherwise columns and rows hold what it read. */
+  write: boolean;
+  columns: string[];
+  rows: unknown[][];
+  /** More rows than the 1000 returned. */
+  truncated: boolean;
+  changes: number;
+  lastInsertRowid: number | null;
+}
+
+/** A child process five started: one run of code or of a tool. */
+export interface ProcessInfo {
+  /** The runner's run id. */
+  id: string;
+  /** run_js code, a tool the agent built (also when called from inside a run), or a define_tool trial. */
+  kind: "code" | "tool" | "trial";
+  /** run_js, the tool's name, or "define_tool <name>". */
+  label: string;
+  /** The loop's turn and step when it started. */
+  turn: number;
+  step: number;
+  startedAt: string;
+  state: "installing" | "running" | "ok" | "failed" | "killed";
+  /** How long it ran, or has run so far. */
+  durationMs: number;
+  /** Output lines so far. */
+  lines: number;
+  error?: string;
+  /** Its background run's id, when started with start_tool. */
+  runId?: string;
+}
+
+export interface ProcessDetail extends ProcessInfo {
+  /** The code it runs. */
+  source: string;
+  args: unknown;
+  /** Its output, the last 2000 lines: stdout, and stderr prefixed [stderr]. */
+  logs: string[];
+  /** Its result, once it finished well. */
+  value?: unknown;
 }

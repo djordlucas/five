@@ -5,7 +5,18 @@ import * as path from "node:path";
 import { afterEach, test } from "node:test";
 import { SEED_PROMPT } from "../src/agent/prompt.ts";
 import { createApi } from "../src/api/server.ts";
-import type { ContextView, EventsPage, Status } from "../src/api/types.ts";
+import type {
+  ContextView,
+  DbResult,
+  DbRows,
+  DbTable,
+  EventsPage,
+  ProcessDetail,
+  ProcessInfo,
+  Status,
+  WorkspaceDir,
+  WorkspaceEntry,
+} from "../src/api/types.ts";
 import { createFive, type Five } from "../src/app.ts";
 import { loadConfig } from "../src/config.ts";
 import type { ChatModel, Completion, CompletionRequest, Message } from "../src/llm/model.ts";
@@ -46,7 +57,15 @@ afterEach(async () => {
 
 function make(replies: Reply[], env: Record<string, string> = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "five-test-"));
-  const cfg = loadConfig({ FIVE_WORKSPACE: dir, FIVE_TURN_DELAY_MS: "0", FIVE_MAX_STEPS: "5", ...env });
+  // The idle guard and the trim are off unless a test is about them.
+  const cfg = loadConfig({
+    FIVE_WORKSPACE: dir,
+    FIVE_TURN_DELAY_MS: "0",
+    FIVE_MAX_STEPS: "5",
+    FIVE_IDLE_TURNS: "0",
+    FIVE_CONTEXT_TRIM: "0",
+    ...env,
+  });
   const model = scripted(replies);
   const five = createFive(cfg, model);
   open.push(five);
@@ -252,8 +271,9 @@ test("turns in a row without a tool call pause the loop", async () => {
   const { five } = make(
     [
       { content: "idle" },
-      { calls: [["read_context", {}]] },
+      { calls: [["memory_write", { name: "n", text: "work" }]] },
       { content: "idle" },
+      { calls: [["memory_read", {}]] },
       { content: "idle" },
       { content: "idle" },
     ],
@@ -261,11 +281,11 @@ test("turns in a row without a tool call pause the loop", async () => {
   );
   five.loop.start();
   while (five.loop.status().running || five.loop.status().busy) await new Promise((r) => setTimeout(r, 5));
-  // The call in turn 2 reset the count: turns 3 and 4 paused it.
+  // The work in turn 2 reset the count; turn 3 replied, and turn 4 only read: they paused it.
   assert.equal(five.loop.ctx.turn, 4);
   assert.equal(five.loop.wasRunning, false);
   const paused = five.state.eventsAfter(0, 100).find((e) => e.type === "loop" && e.state === "paused");
-  assert.equal(paused?.type === "loop" && paused.reason, "2 turns in a row ended without a tool call");
+  assert.equal(paused?.type === "loop" && paused.reason, "2 turns in a row did no work");
 });
 
 test("memory notes outlive the messages they came from", async () => {
@@ -335,26 +355,233 @@ test("a long result of a run is kept in a file, its start in the context", async
 });
 
 test("a next prompt that repeats the turn or reports what is done is refused", async () => {
-  const { five, model } = make([
-    {
-      calls: [
-        ["set_next_prompt", { text: SEED_PROMPT }],
-        ["end_turn", { summary: "s", next: "Turn 1 complete: wrote the plan." }],
-      ],
-    },
-    { calls: [["end_turn", { summary: "s", next: "Write chapter two." }]] },
-    { content: "idle" },
-    { content: "ok" },
-  ]);
+  const { five, model } = make(
+    [
+      {
+        calls: [
+          ["set_next_prompt", { text: SEED_PROMPT }],
+          ["end_turn", { summary: "s", next: "Turn 1 complete: wrote the plan." }],
+          ["end_turn", { summary: "s", next: "Awaiting user request for the next chapter." }],
+          ["end_turn", { summary: "s", next: "Maintain standby mode." }],
+        ],
+      },
+      { calls: [["end_turn", { summary: "s", next: "Write chapter two." }]] },
+      { content: "idle" },
+      { content: "ok" },
+    ],
+    { FIVE_IDLE_TURNS: "3" },
+  );
   await turn(five);
   const results = five.state.eventsAfter(0, 100).flatMap((e) => (e.type === "tool" ? [e] : []));
   assert.match(results[0]?.result ?? "", /^error: that is this turn's own prompt/);
   assert.match(results[1]?.result ?? "", /^error: the next prompt reports what is done/);
+  assert.match(results[2]?.result ?? "", /^error: the next prompt waits/);
+  assert.match(results[3]?.result ?? "", /^error: the next prompt waits/);
   assert.equal(five.loop.ctx.next, "Write chapter two.");
   // A turn without a tool call leaves the prompt to repeat, led by a note.
   await turn(five);
   await turn(five);
   const third = model.requests[3]?.at(-1)?.content as string;
-  assert.match(third, /^\[five\] Your last turn made no tool call/);
+  assert.match(third, /^\[five\] Your last turn did no work/);
   assert.ok(third.endsWith("Write chapter two."));
+});
+
+test("the workspace API reads and writes files and databases, and keeps out of .five", async () => {
+  const { five, cfg } = make([]);
+  const server = createApi({ five, cfg, log: (await import("../src/log.ts")).noopLogger });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}/api/v1/workspace`;
+  const json = { "content-type": "application/json" };
+  const bytes = { "content-type": "application/octet-stream" };
+  const q = (p: string) => `?path=${encodeURIComponent(p)}`;
+  try {
+    // A new file, its directory made; one that exists is not overwritten by a create.
+    const made = await fetch(`${base}/file${q("notes/a.md")}`, {
+      method: "PUT",
+      headers: { ...bytes, "if-match": '""' },
+      body: "one",
+    });
+    const entry = (await made.json()) as WorkspaceEntry;
+    assert.equal(entry.path, "notes/a.md");
+    const again = await fetch(`${base}/file${q("notes/a.md")}`, {
+      method: "PUT",
+      headers: { ...bytes, "if-match": '""' },
+      body: "x",
+    });
+    assert.equal(again.status, 409);
+
+    const read = await fetch(`${base}/file${q("notes/a.md")}`);
+    assert.equal(await read.text(), "one");
+    assert.equal(read.headers.get("content-type"), "application/octet-stream");
+    assert.equal(read.headers.get("content-security-policy"), "sandbox");
+    const version = read.headers.get("etag") ?? "";
+
+    // A write with the version read succeeds once; with it stale, 409.
+    const ok = await fetch(`${base}/file${q("notes/a.md")}`, {
+      method: "PUT",
+      headers: { ...bytes, "if-match": version },
+      body: "two",
+    });
+    assert.equal(ok.status, 200);
+    const stale = await fetch(`${base}/file${q("notes/a.md")}`, {
+      method: "PUT",
+      headers: { ...bytes, "if-match": version },
+      body: "three",
+    });
+    assert.equal(stale.status, 409);
+    assert.equal(fs.readFileSync(path.join(cfg.workspace, "notes/a.md"), "utf8"), "two");
+
+    const root = (await (await fetch(`${base}/files`)).json()) as WorkspaceDir;
+    assert.deepEqual(
+      root.entries.map((e) => [e.name, e.dir]),
+      [["notes", true]],
+    );
+
+    // Five's own data and anything outside the workspace are out of reach.
+    for (const p of [".five/five.db", "../x", "notes/../../x"]) {
+      const r = await fetch(`${base}/file${q(p)}`);
+      assert.ok(r.status === 403 || r.status === 400, `${p}: ${r.status}`);
+    }
+    fs.symlinkSync(path.join(cfg.workspace, ".five"), path.join(cfg.workspace, "link"));
+    assert.equal((await fetch(`${base}/file${q("link/five.db")}`)).status, 403);
+    const json415 = await fetch(`${base}/file${q("x.txt")}`, { method: "PUT", headers: json, body: "{}" });
+    assert.equal(json415.status, 415);
+
+    // A database: create it with SQL, then rows by rowid.
+    const db = path.join(cfg.workspace, "data.db");
+    const { DatabaseSync } = await import("node:sqlite");
+    new DatabaseSync(db).close();
+    const sql = async (s: string) =>
+      (await (
+        await fetch(`${base}/db/sql${q("data.db")}`, {
+          method: "POST",
+          headers: json,
+          body: JSON.stringify({ sql: s }),
+        })
+      ).json()) as DbResult;
+    await sql("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT NOT NULL, n REAL DEFAULT 0)");
+    const listed = (await (await fetch(`${base}/files`)).json()) as WorkspaceDir;
+    assert.equal(listed.entries.find((e) => e.name === "data.db")?.sqlite, true);
+
+    const ins = await fetch(`${base}/db/rows${q("data.db")}`, {
+      method: "POST",
+      headers: json,
+      body: JSON.stringify({ table: "t", values: { name: "a", n: 1.5 } }),
+    });
+    assert.equal(((await ins.json()) as DbResult).lastInsertRowid, 1);
+    await fetch(`${base}/db/rows${q("data.db")}`, {
+      method: "PUT",
+      headers: json,
+      body: JSON.stringify({ table: "t", rowid: 1, values: { name: "b" } }),
+    });
+    const tables = ((await (await fetch(`${base}/db/tables${q("data.db")}`)).json()) as { tables: DbTable[] }).tables;
+    assert.deepEqual(
+      tables.map((t) => [t.name, t.kind, t.rows, t.rowid, t.columns.map((c) => c.name)]),
+      [["t", "table", 1, true, ["id", "name", "n"]]],
+    );
+    const rows = (await (await fetch(`${base}/db/rows${q("data.db")}&table=t`)).json()) as DbRows;
+    assert.deepEqual(rows, { columns: ["id", "name", "n"], rows: [[1, "b", 1.5]], rowids: [1], total: 1 });
+    const read2 = await sql("SELECT name FROM t");
+    assert.deepEqual([read2.write, read2.rows], [false, [["b"]]]);
+    const bad = await fetch(`${base}/db/sql${q("data.db")}`, {
+      method: "POST",
+      headers: json,
+      body: JSON.stringify({ sql: "ATTACH '.five/five.db' AS f" }),
+    });
+    assert.equal(bad.status, 400);
+    const del = await fetch(`${base}/db/rows${q("data.db")}&table=t&rowid=1`, {
+      method: "DELETE",
+      headers: json,
+      body: "{}",
+    });
+    assert.equal(((await del.json()) as DbResult).changes, 1);
+    assert.equal((await fetch(`${base}/db/tables${q("notes/a.md")}`)).status, 400);
+
+    // Delete a file, then its directory once empty.
+    const rm = (p: string, headers: Record<string, string> = {}) =>
+      fetch(`${base}/file${q(p)}`, { method: "DELETE", headers: { ...json, ...headers }, body: "{}" });
+    assert.equal((await rm("notes")).status, 409);
+    assert.equal((await rm("notes/a.md", { "if-match": version })).status, 409);
+    assert.equal((await rm("notes/a.md")).status, 200);
+    assert.equal((await rm("notes")).status, 200);
+  } finally {
+    server.close();
+  }
+});
+
+test("every child process is recorded, with its source, output and result, and a live one can be killed", async () => {
+  const { five, cfg } = make([
+    { calls: [["run_js", { code: "console.log('hi'); export default 6 * 7" }]] },
+    { calls: [["start_tool", { tool: "run_js", args: { code: "await new Promise((r) => setTimeout(r, 60000))" } }]] },
+    { content: "ok" },
+  ]);
+  await turn(five);
+  const server = createApi({ five, cfg, log: (await import("../src/log.ts")).noopLogger });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}/api/v1/processes`;
+  try {
+    const list = ((await (await fetch(base)).json()) as { processes: ProcessInfo[] }).processes;
+    assert.equal(list.length, 2);
+    const [bg, done] = list as [ProcessInfo, ProcessInfo];
+    assert.deepEqual([done.kind, done.label, done.state, done.turn, done.step], ["code", "run_js", "ok", 1, 1]);
+    assert.deepEqual([bg.runId, bg.step], ["r1", 2]);
+    assert.ok(bg.state === "installing" || bg.state === "running", bg.state);
+    const detail = (await (await fetch(`${base}/${done.id}`)).json()) as ProcessDetail;
+    assert.deepEqual(detail.logs, ["hi"]);
+    assert.equal(detail.value, 42);
+    assert.match(detail.source, /console\.log\('hi'\)/);
+
+    const json = { "content-type": "application/json" };
+    const killed = await fetch(`${base}/${bg.id}/kill`, { method: "POST", headers: json, body: "{}" });
+    assert.equal(killed.status, 200);
+    await five.runs.settled("r1");
+    const after = (await (await fetch(`${base}/${bg.id}`)).json()) as ProcessDetail;
+    assert.equal(after.state, "killed");
+    assert.equal((await fetch(`${base}/${bg.id}/kill`, { method: "POST", headers: json, body: "{}" })).status, 409);
+  } finally {
+    server.close();
+  }
+});
+
+test("the context warning survives a restart", async () => {
+  const { five, cfg } = make([{ content: "a", tokens: 900 }], { FIVE_CONTEXT_TOKENS: "1000" });
+  await turn(five);
+  await five.close();
+  open.splice(open.indexOf(five), 1);
+  const model = scripted([{ content: "b" }]);
+  const again = createFive(cfg, model);
+  open.push(again);
+  assert.equal(again.loop.status().promptTokens, 900);
+  await turn(again);
+  assert.match(model.requests[0]?.at(-1)?.content as string, /^\[five\] Your context is 900 of 1,000 tokens/);
+});
+
+test("a nearly full context has its oldest messages dropped before the turn", async () => {
+  const text = "x".repeat(400);
+  const { five, model } = make(
+    [
+      { calls: [["run_js", { code: `"${text}"` }]], tokens: 300 },
+      { content: text, tokens: 600 },
+      { calls: [["run_js", { code: `"${text}"` }]], tokens: 900 },
+      { content: text, tokens: 950 },
+      { content: "c" },
+    ],
+    { FIVE_CONTEXT_TOKENS: "1000", FIVE_CONTEXT_TRIM: "90" },
+  );
+  await turn(five);
+  await turn(five);
+  assert.equal(five.loop.ctx.messages.length, 8);
+  await turn(five);
+  const sent = model.requests.at(-1) ?? [];
+  const prompt = sent.at(-1)?.content as string;
+  assert.match(
+    prompt,
+    /^\[five\] Your context was 950 of 1,000 tokens \(95%\), too full to work in, so five dropped your 5 oldest messages/,
+  );
+  assert.doesNotMatch(prompt, /\[five\] Your context is/);
+  // The first turn and the second's prompt are gone: about half the characters.
+  assert.equal(sent.length, 5);
+  assert.equal(sent[1]?.role, "assistant");
+  const change = five.state.eventsAfter(0, 100).find((e) => e.type === "context" && e.by === "five");
+  assert.ok(change);
 });
