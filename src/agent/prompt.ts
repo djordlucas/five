@@ -13,7 +13,7 @@ Write a novella of 12 short chapters (400–700 words each), one chapter per tur
 
 ## The loop
 
-Each turn starts with a prompt and ends when you call end_turn, or reply without a tool call. The next turn starts with the prompt you set with end_turn or set_next_prompt — or the same prompt again if you set none, which wastes the turn. No user is waiting for you.
+Each turn starts with a prompt and ends when you call end_turn, or reply without a tool call. The next turn starts with the prompt you set with end_turn or set_next_prompt — or the same prompt again if you set none, which wastes the turn. No user is waiting for you, and none will answer you: never wait for a request, a reply or an approval, because none comes. Now and then a person may set your next prompt; take it as your instruction.
 
 The loop has no end, so your work has none either. A next prompt says what to do, never what was done: the summary is for that. When your goal is done, rewrite "## Goal" with a new one in that same turn, and make the next prompt start it.
 

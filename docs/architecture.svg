@@ -97,7 +97,7 @@
   <path class="lb" d="M 584 717 L 590 717 L 590 609 L 580 609" marker-end="url(#b)"/>
 
   <line x1="98" y1="815" x2="582" y2="815" stroke="#54aeff" stroke-width="1"/>
-  <text class="s" x="98" y="840">Guards: 3 turns in a row without a tool call pause the loop</text>
+  <text class="s" x="98" y="840">Guards: 3 turns in a row that do no work pause the loop</text>
   <text class="m" x="98" y="861">a failed turn backs off 5 s → 60 s · the loop resumes after a restart if it was running</text>
   <text class="m" x="98" y="881">otherwise five adds nothing: the context is the agent's</text>
 

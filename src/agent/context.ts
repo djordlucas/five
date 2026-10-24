@@ -318,6 +318,12 @@ function checkNext(text: string, env: ContextEnv): string | undefined {
   if (t === env.turnPrompt.trim()) {
     return "error: that is this turn's own prompt, so the next turn would redo this one; say what to do next";
   }
+  if (WAITING.test(t)) {
+    return (
+      "error: the next prompt waits — for a user, a request or approval — and no user will answer: the turn would be " +
+      "wasted. Decide what to do next yourself and say it; if your goal is done, rewrite ## Goal with a new one and start it"
+    );
+  }
   if (DONE_REPORT.test(t)) {
     return (
       "error: the next prompt reports what is done instead of saying what to do next. Put the report in the summary; " +
@@ -326,6 +332,10 @@ function checkNext(text: string, env: ContextEnv): string | undefined {
   }
   return undefined;
 }
+
+/** A next prompt that waits for someone: "Awaiting user request …", "Maintain standby mode …". */
+const WAITING =
+  /\b(awaiting|wait(ing)? (for|on|until) (the |a |an |further |new )?(user|request|instruction|input|approval|reply|response|feedback|direction)|stand(ing)?[ -]?by|on hold|until (the )?user|user('s)? (request|input|instruction|reply|response|approval))/i;
 
 /** A next prompt that opens by reporting a finished turn or goal: "Turn 22 complete", "End turn …", "Done …". */
 const DONE_REPORT =

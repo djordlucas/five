@@ -33,6 +33,8 @@ export const AGENT_ID = "five";
 
 /** A tool result longer than this is cut. */
 const MAX_RESULT_CHARS = 16_000;
+/** Tools that only read or end the turn: a turn that calls nothing else did no work. */
+const NO_WORK = new Set(["read_context", "memory_read", "set_next_prompt", "end_turn"]);
 /** Where long results of runs are kept, in the workspace. */
 export const RESULTS_DIR = "results";
 /** Waits after a failed turn, doubling up to the last. */
@@ -67,7 +69,7 @@ export class Loop {
   private step = 0;
   private promptTokens: number | null = null;
   private failures = 0;
-  /** Turns in a row that ended without a tool call. */
+  /** Turns in a row that did no work: no tool call beyond reading and ending the turn. */
   private idle = 0;
   /** The prompt the current turn started with. */
   private turnPrompt = "";
@@ -208,7 +210,7 @@ export class Loop {
       if (!this.running) break;
       const { idleTurns = 0 } = this.o;
       if (idleTurns > 0 && this.idle >= idleTurns) {
-        this.pause(`${this.idle} turns in a row ended without a tool call`);
+        this.pause(`${this.idle} turns in a row did no work`);
         break;
       }
       this.failures = ok ? 0 : this.failures + 1;
@@ -248,7 +250,7 @@ export class Loop {
 
     let reason: TurnEnd = "max_steps";
     let error: string | undefined;
-    let calls = 0;
+    let worked = false;
     try {
       for (this.step = 1; this.step <= this.o.maxSteps; this.step++) {
         const step = this.step;
@@ -292,7 +294,7 @@ export class Loop {
           break;
         }
 
-        calls += message.tool_calls.length;
+        if (message.tool_calls.some((c) => !NO_WORK.has(c.function.name))) worked = true;
         let end = false;
         let summary: string | undefined;
         for (const call of message.tool_calls) {
@@ -335,7 +337,7 @@ export class Loop {
       this.step = 0;
       this.busy = false;
       this.abort = undefined;
-      this.idle = reason === "replied" && calls === 0 ? this.idle + 1 : 0;
+      this.idle = worked || reason === "stopped" || reason === "error" ? 0 : this.idle + 1;
       this.save();
       this.emit({ type: "turn_ended", reason, next: ctx.next, ...(error && { error }) });
       log[reason === "error" ? "error" : "info"]("turn ended", {
@@ -380,10 +382,10 @@ export class Loop {
     return `${result.slice(0, resultChars)}\n… [${result.length - resultChars} more characters; the whole result is in ${rel}]`;
   }
 
-  /** The note a turn's prompt starts with after a turn that made no tool call, which left the prompt to repeat. */
+  /** The note a turn's prompt starts with after a turn that did no work. */
   private idleWarning(): string | undefined {
-    if (this.idle === 0) return undefined;
-    return "[five] Your last turn made no tool call, so this prompt repeats and that turn was wasted. Do the next piece of work now. If your goal is done, rewrite ## Goal in your system prompt with a new goal and start it. End the turn with end_turn(summary, next), where next says what to do — not what was done.";
+    if (this.idle === 0 || !this.o.idleTurns) return undefined;
+    return "[five] Your last turn did no work: it called nothing beyond reading and ending the turn, so it was wasted. No user will answer or give you a request: what you do next is yours to decide. Do the next piece of work now. If your goal is done, rewrite ## Goal in your system prompt with a new goal and start it. End the turn with end_turn(summary, next), where next says what to do — not what was done, and never to wait.";
   }
 
   /** The warning a turn's prompt starts with when the last call filled most of the window. */

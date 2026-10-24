@@ -57,7 +57,14 @@ afterEach(async () => {
 
 function make(replies: Reply[], env: Record<string, string> = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "five-test-"));
-  const cfg = loadConfig({ FIVE_WORKSPACE: dir, FIVE_TURN_DELAY_MS: "0", FIVE_MAX_STEPS: "5", ...env });
+  // The idle guard is off unless a test is about it.
+  const cfg = loadConfig({
+    FIVE_WORKSPACE: dir,
+    FIVE_TURN_DELAY_MS: "0",
+    FIVE_MAX_STEPS: "5",
+    FIVE_IDLE_TURNS: "0",
+    ...env,
+  });
   const model = scripted(replies);
   const five = createFive(cfg, model);
   open.push(five);
@@ -263,8 +270,9 @@ test("turns in a row without a tool call pause the loop", async () => {
   const { five } = make(
     [
       { content: "idle" },
-      { calls: [["read_context", {}]] },
+      { calls: [["memory_write", { name: "n", text: "work" }]] },
       { content: "idle" },
+      { calls: [["memory_read", {}]] },
       { content: "idle" },
       { content: "idle" },
     ],
@@ -272,11 +280,11 @@ test("turns in a row without a tool call pause the loop", async () => {
   );
   five.loop.start();
   while (five.loop.status().running || five.loop.status().busy) await new Promise((r) => setTimeout(r, 5));
-  // The call in turn 2 reset the count: turns 3 and 4 paused it.
+  // The work in turn 2 reset the count; turn 3 replied, and turn 4 only read: they paused it.
   assert.equal(five.loop.ctx.turn, 4);
   assert.equal(five.loop.wasRunning, false);
   const paused = five.state.eventsAfter(0, 100).find((e) => e.type === "loop" && e.state === "paused");
-  assert.equal(paused?.type === "loop" && paused.reason, "2 turns in a row ended without a tool call");
+  assert.equal(paused?.type === "loop" && paused.reason, "2 turns in a row did no work");
 });
 
 test("memory notes outlive the messages they came from", async () => {
@@ -346,27 +354,34 @@ test("a long result of a run is kept in a file, its start in the context", async
 });
 
 test("a next prompt that repeats the turn or reports what is done is refused", async () => {
-  const { five, model } = make([
-    {
-      calls: [
-        ["set_next_prompt", { text: SEED_PROMPT }],
-        ["end_turn", { summary: "s", next: "Turn 1 complete: wrote the plan." }],
-      ],
-    },
-    { calls: [["end_turn", { summary: "s", next: "Write chapter two." }]] },
-    { content: "idle" },
-    { content: "ok" },
-  ]);
+  const { five, model } = make(
+    [
+      {
+        calls: [
+          ["set_next_prompt", { text: SEED_PROMPT }],
+          ["end_turn", { summary: "s", next: "Turn 1 complete: wrote the plan." }],
+          ["end_turn", { summary: "s", next: "Awaiting user request for the next chapter." }],
+          ["end_turn", { summary: "s", next: "Maintain standby mode." }],
+        ],
+      },
+      { calls: [["end_turn", { summary: "s", next: "Write chapter two." }]] },
+      { content: "idle" },
+      { content: "ok" },
+    ],
+    { FIVE_IDLE_TURNS: "3" },
+  );
   await turn(five);
   const results = five.state.eventsAfter(0, 100).flatMap((e) => (e.type === "tool" ? [e] : []));
   assert.match(results[0]?.result ?? "", /^error: that is this turn's own prompt/);
   assert.match(results[1]?.result ?? "", /^error: the next prompt reports what is done/);
+  assert.match(results[2]?.result ?? "", /^error: the next prompt waits/);
+  assert.match(results[3]?.result ?? "", /^error: the next prompt waits/);
   assert.equal(five.loop.ctx.next, "Write chapter two.");
   // A turn without a tool call leaves the prompt to repeat, led by a note.
   await turn(five);
   await turn(five);
   const third = model.requests[3]?.at(-1)?.content as string;
-  assert.match(third, /^\[five\] Your last turn made no tool call/);
+  assert.match(third, /^\[five\] Your last turn did no work/);
   assert.ok(third.endsWith("Write chapter two."));
 });
 
