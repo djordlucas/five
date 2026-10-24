@@ -158,7 +158,7 @@ function TurnView({ t }: { t: Turn }) {
           case 'context':
             return (
               <p key={e.seq} class={styles.line}>
-                ✎ {e.by === 'user' ? 'you' : 'the agent'}: {e.change}
+                ✎ {e.by === 'user' ? 'you' : e.by === 'five' ? 'five' : 'the agent'}: {e.change}
               </p>
             );
           case 'loop':

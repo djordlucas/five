@@ -6,9 +6,10 @@
 // prompt the agent set with set_next_prompt, or the same one. The context is
 // saved after every change, so a restart resumes it.
 //
-// Five keeps out of the context but for two guards: when the last call filled
-// most of the window, the turn's prompt starts with a warning; and turns that
-// end without a single tool call, several in a row, pause the loop. A turn the
+// Five keeps out of the context but for its guards: when the last call filled
+// most of the window, the turn's prompt starts with a warning, and when it
+// filled nearly all of it, five drops the oldest messages itself; and turns
+// that do no work, several in a row, pause the loop. A turn the
 // agent ends with a summary is folded into it, and a long result of a run is
 // kept in a file, with only its start in the context.
 
@@ -37,6 +38,8 @@ const MAX_RESULT_CHARS = 16_000;
 const NO_WORK = new Set(["read_context", "memory_read", "set_next_prompt", "end_turn"]);
 /** Where long results of runs are kept, in the workspace. */
 export const RESULTS_DIR = "results";
+/** Share of the window a trim aims to leave the context at. */
+const TRIM_TO = 0.5;
 /** Waits after a failed turn, doubling up to the last. */
 const BACKOFF_MS = [5_000, 10_000, 30_000, 60_000];
 
@@ -53,6 +56,8 @@ export interface LoopOptions {
   turnDelayMs: number;
   /** Share of the window above which a turn's prompt starts with a warning; 0 never. */
   contextWarn?: number;
+  /** Share of the window above which five drops the oldest messages before a turn; 0 never. */
+  contextTrim?: number;
   /** Turns in a row without a tool call after which the loop pauses; 0 never. */
   idleTurns?: number;
   /** A result of a run longer than this goes to a file, its start to the context; 0 never. */
@@ -243,7 +248,8 @@ export class Loop {
     const log = this.o.log.child({ turn });
     const started = performance.now();
     const prompt = ctx.next;
-    const warning = [this.idleWarning(), this.contextWarning()].filter(Boolean).join("\n\n") || undefined;
+    const trimmed = this.trim();
+    const warning = [this.idleWarning(), trimmed ?? this.contextWarning()].filter(Boolean).join("\n\n") || undefined;
     this.turnPrompt = prompt;
     const opening: Message = { role: "user", content: warning ? `${warning}\n\n${prompt}` : prompt };
     ctx.messages.push(opening);
@@ -386,6 +392,31 @@ export class Loop {
     return `${result.slice(0, resultChars)}\n… [${result.length - resultChars} more characters; the whole result is in ${rel}]`;
   }
 
+  /**
+   * When the last call filled nearly all the window, drop the oldest messages
+   * until about half of it is left, and return the note that says so. A model
+   * with a full window can no longer make the call that frees it.
+   */
+  private trim(): string | undefined {
+    const { contextTrim = 0, contextTokens } = this.o;
+    const used = this.promptTokens;
+    const { messages } = this.ctx;
+    if (contextTrim <= 0 || used === null || used < contextTrim * contextTokens || !messages.length) return undefined;
+    const sizes = messages.map(chars);
+    const total = sizes.reduce((a, b) => a + b, 0);
+    // Characters stand in for tokens: drop the share of them that is over the aim.
+    const over = total * (1 - (TRIM_TO * contextTokens) / used);
+    let cut = 0;
+    for (let dropped = 0; cut < messages.length && dropped < over; cut++) dropped += sizes[cut] ?? 0;
+    // A tool result without the call before it is no message the model can read.
+    while (messages[cut]?.role === "tool") cut++;
+    messages.splice(0, cut);
+    this.emit({ type: "context", by: "five", change: `the ${cut} oldest messages dropped to free the window` });
+    this.o.log.warn("context trimmed", { messages: cut, prompt_tokens: used });
+    const share = Math.round((100 * used) / contextTokens);
+    return `[five] Your context was ${used.toLocaleString("en-US")} of ${contextTokens.toLocaleString("en-US")} tokens (${share}%), too full to work in, so five dropped your ${cut} oldest messages. What you saved with memory_write is still there: memory_read lists it. Keep the window small from now on: end every turn with end_turn(summary, next), and delete messages you no longer need.`;
+  }
+
   /** The note a turn's prompt starts with after a turn that did no work. */
   private idleWarning(): string | undefined {
     if (this.idle === 0 || !this.o.idleTurns) return undefined;
@@ -511,4 +542,12 @@ function isFailure(result: string): boolean {
 function truncate(s: string): string {
   if (s.length <= MAX_RESULT_CHARS) return s;
   return `${s.slice(0, MAX_RESULT_CHARS)}\n… [truncated ${s.length - MAX_RESULT_CHARS} of ${s.length} characters]`;
+}
+
+/** A message's length in characters: its text and its calls. */
+function chars(m: Message): number {
+  let n = m.content?.length ?? 0;
+  for (const c of (m.role === "assistant" && m.tool_calls) || [])
+    n += c.function.name.length + c.function.arguments.length;
+  return n;
 }

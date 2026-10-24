@@ -57,12 +57,13 @@ afterEach(async () => {
 
 function make(replies: Reply[], env: Record<string, string> = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "five-test-"));
-  // The idle guard is off unless a test is about it.
+  // The idle guard and the trim are off unless a test is about them.
   const cfg = loadConfig({
     FIVE_WORKSPACE: dir,
     FIVE_TURN_DELAY_MS: "0",
     FIVE_MAX_STEPS: "5",
     FIVE_IDLE_TURNS: "0",
+    FIVE_CONTEXT_TRIM: "0",
     ...env,
   });
   const model = scripted(replies);
@@ -553,4 +554,34 @@ test("the context warning survives a restart", async () => {
   assert.equal(again.loop.status().promptTokens, 900);
   await turn(again);
   assert.match(model.requests[0]?.at(-1)?.content as string, /^\[five\] Your context is 900 of 1,000 tokens/);
+});
+
+test("a nearly full context has its oldest messages dropped before the turn", async () => {
+  const text = "x".repeat(400);
+  const { five, model } = make(
+    [
+      { calls: [["run_js", { code: `"${text}"` }]], tokens: 300 },
+      { content: text, tokens: 600 },
+      { calls: [["run_js", { code: `"${text}"` }]], tokens: 900 },
+      { content: text, tokens: 950 },
+      { content: "c" },
+    ],
+    { FIVE_CONTEXT_TOKENS: "1000", FIVE_CONTEXT_TRIM: "90" },
+  );
+  await turn(five);
+  await turn(five);
+  assert.equal(five.loop.ctx.messages.length, 8);
+  await turn(five);
+  const sent = model.requests.at(-1) ?? [];
+  const prompt = sent.at(-1)?.content as string;
+  assert.match(
+    prompt,
+    /^\[five\] Your context was 950 of 1,000 tokens \(95%\), too full to work in, so five dropped your 5 oldest messages/,
+  );
+  assert.doesNotMatch(prompt, /\[five\] Your context is/);
+  // The first turn and the second's prompt are gone: about half the characters.
+  assert.equal(sent.length, 5);
+  assert.equal(sent[1]?.role, "assistant");
+  const change = five.state.eventsAfter(0, 100).find((e) => e.type === "context" && e.by === "five");
+  assert.ok(change);
 });
