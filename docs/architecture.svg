@@ -34,10 +34,11 @@
   <!-- Outside: browser and Ollama -->
   <rect class="ext" x="40" y="110" width="460" height="140" rx="10"/>
   <text class="h" x="60" y="138">Web UI · web/ (Preact + Vite)</text>
-  <text class="s" x="60" y="164">Loop — controls, window meter, every turn live</text>
-  <text class="s" x="60" y="186">Context — edit the prompts and messages, start over</text>
-  <text class="s" x="60" y="208">Tools — what the agent built, with source</text>
-  <text class="m" x="60" y="232">your browser · served by five from web/dist</text>
+  <text class="s" x="60" y="161">Loop — controls, window meter, every turn live</text>
+  <text class="s" x="60" y="180">Context — edit the prompts and messages, start over</text>
+  <text class="s" x="60" y="199">Tools — what the agent built, with source</text>
+  <text class="s" x="60" y="218">Workspace — its files and databases, read and edit</text>
+  <text class="m" x="60" y="240">your browser · served by five from web/dist</text>
 
   <rect class="ext" x="1180" y="110" width="380" height="140" rx="10"/>
   <text class="h" x="1200" y="138">Ollama · on the host</text>
@@ -66,7 +67,7 @@
   <text class="h" x="98" y="398">HTTP API · src/api/server.ts</text>
   <text class="s" x="98" y="422">loop: start · pause · stop · step</text>
   <text class="s" x="98" y="442">context: read · edit · reset (clean) — refused during a turn</text>
-  <text class="s" x="98" y="462">status · events · turns · tools</text>
+  <text class="s" x="98" y="462">status · events · tools · workspace files and databases</text>
 
   <!-- Loop -->
   <rect class="loop" x="80" y="492" width="520" height="408" rx="8"/>
@@ -174,7 +175,8 @@
   <text class="c" x="1158" y="1076">…</text><text class="s" x="1278" y="1076">whatever the agent makes</text>
   <text class="c" x="1158" y="1098">.five/</text><text class="s" x="1278" y="1098">five.db · tools/ · node_modules</text>
   <text class="s" x="1278" y="1120">five.log</text>
-  <text class="m" x="1158" y="1158">a clean reset empties it all but .five</text>
+  <text class="m" x="1158" y="1150">read and edited from the web UI, all but .five</text>
+  <text class="m" x="1158" y="1168">a clean reset empties it all but .five</text>
 
   <!-- Arrows -->
   <!-- browser ⇄ API -->

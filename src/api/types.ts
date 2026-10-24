@@ -107,3 +107,60 @@ export interface ToolDetail extends ToolInfo {
 export interface ErrorBody {
   error: { message: string };
 }
+
+/** A file or directory in the workspace. */
+export interface WorkspaceEntry {
+  name: string;
+  /** Relative to the workspace, with / between its parts. */
+  path: string;
+  dir: boolean;
+  bytes: number;
+  modified: string;
+  /** A file's version: what If-Match sends back to write it only if unchanged. */
+  version?: string;
+  /** The file is a SQLite database. */
+  sqlite?: boolean;
+}
+
+export interface WorkspaceDir {
+  /** "" for the workspace itself. */
+  path: string;
+  /** Directories first. Five's own .five/ is not listed. */
+  entries: WorkspaceEntry[];
+}
+
+export interface DbColumn {
+  name: string;
+  type: string;
+  notNull: boolean;
+  default: string | null;
+  pk: boolean;
+}
+
+export interface DbTable {
+  name: string;
+  kind: "table" | "view";
+  columns: DbColumn[];
+  rows: number;
+  /** Rows have a rowid, so one can be changed or deleted by it. */
+  rowid: boolean;
+}
+
+export interface DbRows {
+  columns: string[];
+  rows: unknown[][];
+  /** Each row's rowid, when the table has them. */
+  rowids?: number[];
+  total: number;
+}
+
+export interface DbResult {
+  /** The statement wrote: changes and lastInsertRowid say what. Otherwise columns and rows hold what it read. */
+  write: boolean;
+  columns: string[];
+  rows: unknown[][];
+  /** More rows than the 1000 returned. */
+  truncated: boolean;
+  changes: number;
+  lastInsertRowid: number | null;
+}

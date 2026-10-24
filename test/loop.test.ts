@@ -5,7 +5,16 @@ import * as path from "node:path";
 import { afterEach, test } from "node:test";
 import { SEED_PROMPT } from "../src/agent/prompt.ts";
 import { createApi } from "../src/api/server.ts";
-import type { ContextView, EventsPage, Status } from "../src/api/types.ts";
+import type {
+  ContextView,
+  DbResult,
+  DbRows,
+  DbTable,
+  EventsPage,
+  Status,
+  WorkspaceDir,
+  WorkspaceEntry,
+} from "../src/api/types.ts";
 import { createFive, type Five } from "../src/app.ts";
 import { loadConfig } from "../src/config.ts";
 import type { ChatModel, Completion, CompletionRequest, Message } from "../src/llm/model.ts";
@@ -357,4 +366,127 @@ test("a next prompt that repeats the turn or reports what is done is refused", a
   const third = model.requests[3]?.at(-1)?.content as string;
   assert.match(third, /^\[five\] Your last turn made no tool call/);
   assert.ok(third.endsWith("Write chapter two."));
+});
+
+test("the workspace API reads and writes files and databases, and keeps out of .five", async () => {
+  const { five, cfg } = make([]);
+  const server = createApi({ five, cfg, log: (await import("../src/log.ts")).noopLogger });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}/api/v1/workspace`;
+  const json = { "content-type": "application/json" };
+  const bytes = { "content-type": "application/octet-stream" };
+  const q = (p: string) => `?path=${encodeURIComponent(p)}`;
+  try {
+    // A new file, its directory made; one that exists is not overwritten by a create.
+    const made = await fetch(`${base}/file${q("notes/a.md")}`, {
+      method: "PUT",
+      headers: { ...bytes, "if-match": '""' },
+      body: "one",
+    });
+    const entry = (await made.json()) as WorkspaceEntry;
+    assert.equal(entry.path, "notes/a.md");
+    const again = await fetch(`${base}/file${q("notes/a.md")}`, {
+      method: "PUT",
+      headers: { ...bytes, "if-match": '""' },
+      body: "x",
+    });
+    assert.equal(again.status, 409);
+
+    const read = await fetch(`${base}/file${q("notes/a.md")}`);
+    assert.equal(await read.text(), "one");
+    assert.equal(read.headers.get("content-type"), "application/octet-stream");
+    assert.equal(read.headers.get("content-security-policy"), "sandbox");
+    const version = read.headers.get("etag") ?? "";
+
+    // A write with the version read succeeds once; with it stale, 409.
+    const ok = await fetch(`${base}/file${q("notes/a.md")}`, {
+      method: "PUT",
+      headers: { ...bytes, "if-match": version },
+      body: "two",
+    });
+    assert.equal(ok.status, 200);
+    const stale = await fetch(`${base}/file${q("notes/a.md")}`, {
+      method: "PUT",
+      headers: { ...bytes, "if-match": version },
+      body: "three",
+    });
+    assert.equal(stale.status, 409);
+    assert.equal(fs.readFileSync(path.join(cfg.workspace, "notes/a.md"), "utf8"), "two");
+
+    const root = (await (await fetch(`${base}/files`)).json()) as WorkspaceDir;
+    assert.deepEqual(
+      root.entries.map((e) => [e.name, e.dir]),
+      [["notes", true]],
+    );
+
+    // Five's own data and anything outside the workspace are out of reach.
+    for (const p of [".five/five.db", "../x", "notes/../../x"]) {
+      const r = await fetch(`${base}/file${q(p)}`);
+      assert.ok(r.status === 403 || r.status === 400, `${p}: ${r.status}`);
+    }
+    fs.symlinkSync(path.join(cfg.workspace, ".five"), path.join(cfg.workspace, "link"));
+    assert.equal((await fetch(`${base}/file${q("link/five.db")}`)).status, 403);
+    const json415 = await fetch(`${base}/file${q("x.txt")}`, { method: "PUT", headers: json, body: "{}" });
+    assert.equal(json415.status, 415);
+
+    // A database: create it with SQL, then rows by rowid.
+    const db = path.join(cfg.workspace, "data.db");
+    const { DatabaseSync } = await import("node:sqlite");
+    new DatabaseSync(db).close();
+    const sql = async (s: string) =>
+      (await (
+        await fetch(`${base}/db/sql${q("data.db")}`, {
+          method: "POST",
+          headers: json,
+          body: JSON.stringify({ sql: s }),
+        })
+      ).json()) as DbResult;
+    await sql("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT NOT NULL, n REAL DEFAULT 0)");
+    const listed = (await (await fetch(`${base}/files`)).json()) as WorkspaceDir;
+    assert.equal(listed.entries.find((e) => e.name === "data.db")?.sqlite, true);
+
+    const ins = await fetch(`${base}/db/rows${q("data.db")}`, {
+      method: "POST",
+      headers: json,
+      body: JSON.stringify({ table: "t", values: { name: "a", n: 1.5 } }),
+    });
+    assert.equal(((await ins.json()) as DbResult).lastInsertRowid, 1);
+    await fetch(`${base}/db/rows${q("data.db")}`, {
+      method: "PUT",
+      headers: json,
+      body: JSON.stringify({ table: "t", rowid: 1, values: { name: "b" } }),
+    });
+    const tables = ((await (await fetch(`${base}/db/tables${q("data.db")}`)).json()) as { tables: DbTable[] }).tables;
+    assert.deepEqual(
+      tables.map((t) => [t.name, t.kind, t.rows, t.rowid, t.columns.map((c) => c.name)]),
+      [["t", "table", 1, true, ["id", "name", "n"]]],
+    );
+    const rows = (await (await fetch(`${base}/db/rows${q("data.db")}&table=t`)).json()) as DbRows;
+    assert.deepEqual(rows, { columns: ["id", "name", "n"], rows: [[1, "b", 1.5]], rowids: [1], total: 1 });
+    const read2 = await sql("SELECT name FROM t");
+    assert.deepEqual([read2.write, read2.rows], [false, [["b"]]]);
+    const bad = await fetch(`${base}/db/sql${q("data.db")}`, {
+      method: "POST",
+      headers: json,
+      body: JSON.stringify({ sql: "ATTACH '.five/five.db' AS f" }),
+    });
+    assert.equal(bad.status, 400);
+    const del = await fetch(`${base}/db/rows${q("data.db")}&table=t&rowid=1`, {
+      method: "DELETE",
+      headers: json,
+      body: "{}",
+    });
+    assert.equal(((await del.json()) as DbResult).changes, 1);
+    assert.equal((await fetch(`${base}/db/tables${q("notes/a.md")}`)).status, 400);
+
+    // Delete a file, then its directory once empty.
+    const rm = (p: string, headers: Record<string, string> = {}) =>
+      fetch(`${base}/file${q(p)}`, { method: "DELETE", headers: { ...json, ...headers }, body: "{}" });
+    assert.equal((await rm("notes")).status, 409);
+    assert.equal((await rm("notes/a.md", { "if-match": version })).status, 409);
+    assert.equal((await rm("notes/a.md")).status, 200);
+    assert.equal((await rm("notes")).status, 200);
+  } finally {
+    server.close();
+  }
 });

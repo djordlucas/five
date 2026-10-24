@@ -1,4 +1,4 @@
-export type IconName = 'loop' | 'context' | 'tool';
+export type IconName = 'loop' | 'context' | 'tool' | 'folder';
 
 export interface Section {
   path: string;
@@ -10,6 +10,7 @@ export const sections: Section[] = [
   { path: '/', label: 'Loop', icon: 'loop' },
   { path: '/context', label: 'Context', icon: 'context' },
   { path: '/tools', label: 'Tools', icon: 'tool' },
+  { path: '/workspace', label: 'Workspace', icon: 'folder' },
 ];
 
 export function sectionFor(path: string): Section {

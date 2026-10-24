@@ -32,6 +32,7 @@ Preact, with seven's and nine's design tokens, polling the API once a second.
 | Loop | Start / Pause / Step / Stop turn; model, turn and step; context-window meter; every turn live — its prompt, each model step (thinking, reply, tool calls with arguments and results), context changes, how it ended and the next prompt. |
 | Context | The next prompt, the system prompt and every message, each editable, and messages deletable, while the loop is paused and no turn runs. **Start over** resets to the seed; its checkbox (on by default) also deletes the built tools and the workspace files. |
 | Tools | The tools the agent built, with their parameters and source. |
+| Workspace | The workspace's files, to read and edit (after nine's Data section). A text file up to 2 MB opens in an editor (⌘S saves); any file downloads; New file takes a path such as `notes/today.md`; Upload puts files in the directory shown; Delete removes a file, or a directory once empty. A SQLite database opens its tables: rows 100 at a time, Add row, Edit to change or delete one by rowid, and a SQL view that runs one statement. A file the agent changed since you opened it is not overwritten. `.five/` is not reachable. |
 
 ## Running
 
@@ -76,8 +77,13 @@ JSON over HTTP; writes need `content-type: application/json`.
 | GET | `/api/v1/events?after=<seq>` · `?turns=<n>` | the event log: after a seq, or the last n turns |
 | GET | `/api/v1/turns/:n` | one turn's events |
 | GET | `/api/v1/tools`, `/api/v1/tools/:name` | built tools |
+| GET | `/api/v1/workspace/files?path=` | one directory of the workspace, directories first |
+| GET, PUT, DELETE | `/api/v1/workspace/file?path=` | a file's bytes (up to 32 MB, as `application/octet-stream` with a sandbox CSP; `&download=true` for an attachment); write one from an `application/octet-stream` body; delete a file or an empty directory. Its version is the `ETag`; with `If-Match`, a write or delete of a file changed since is `409`, and `If-Match: ""` creates only |
+| GET | `/api/v1/workspace/db/tables?path=` | a database file's tables and views: columns, row counts, whether rows have a rowid |
+| GET, POST, PUT, DELETE | `/api/v1/workspace/db/rows?path=` | a page of a table's rows (`&table=&offset=&limit=`, at most 500); insert `{table, values}`; change `{table, rowid, values}`; delete `&table=&rowid=` |
+| POST | `/api/v1/workspace/db/sql?path=` | `{sql, args?}`: one statement; a read returns up to 1000 rows, a write `changes` and `lastInsertRowid`. `ATTACH` and `VACUUM INTO` are refused |
 
-Context changes are refused (409) during a turn.
+Context changes are refused (409) during a turn. Workspace paths are relative to the workspace; `..`, a link out of it, and `.five/` are refused.
 
 ## Layout
 
@@ -89,7 +95,7 @@ Context changes are refused (409) during a turn.
 | `src/agent/builtins/`, `src/runner/`, `src/tools/` | seven's tools, runner and tool store, copied |
 | `src/llm/` | the Ollama client and text tool-call recovery, from seven |
 | `src/state.ts` | the SQLite state |
-| `src/api/` | the HTTP API and its shared types |
+| `src/api/` | the HTTP API, its shared types, and the workspace's files and databases (`workspace.ts`) |
 | `web/` | the web UI |
 | `test/` | `node:test` against a scripted model |
 | `docs/` | the architecture diagram |

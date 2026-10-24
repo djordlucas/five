@@ -16,6 +16,7 @@ import type { Five } from "../app.ts";
 import type { Config } from "../config.ts";
 import type { Logger } from "../log.ts";
 import type { ContextView, ErrorBody, EventsPage, Status, ToolDetail, ToolInfo } from "./types.ts";
+import { MAX_FILE_BYTES, Workspace, WorkspaceError } from "./workspace.ts";
 
 const MAX_BODY = 1024 * 1024;
 /** Events in one page. */
@@ -43,16 +44,29 @@ interface Ctx {
   params: Record<string, string>;
   query: URLSearchParams;
   body: Record<string, unknown>;
+  /** The body as bytes, for a route that takes them. */
+  bytes: Buffer;
+  headers: http.IncomingHttpHeaders;
 }
 
 type Handler = (ctx: Ctx) => unknown;
+
+/** A response a handler makes itself: bytes rather than JSON. */
+class Raw {
+  readonly headers: Record<string, string>;
+  readonly body: Buffer;
+  constructor(headers: Record<string, string>, body: Buffer) {
+    this.headers = headers;
+    this.body = body;
+  }
+}
 
 export function createApi(opts: ApiOptions): http.Server {
   const { five, cfg } = opts;
   const { loop, state, store } = five;
   const log = opts.log.child({ component: "api" });
-  const routes: { method: string; pattern: RegExp; keys: string[]; handler: Handler }[] = [];
-  const route = (method: string, p: string, handler: Handler) => {
+  const routes: { method: string; pattern: RegExp; keys: string[]; handler: Handler; bytes?: boolean }[] = [];
+  const route = (method: string, p: string, handler: Handler, opts: { bytes?: boolean } = {}) => {
     const keys: string[] = [];
     const pattern = new RegExp(
       `^${p.replace(/:(\w+)/g, (_, k: string) => {
@@ -60,7 +74,7 @@ export function createApi(opts: ApiOptions): http.Server {
         return "([^/]+)";
       })}$`,
     );
-    routes.push({ method, pattern, keys, handler });
+    routes.push({ method, pattern, keys, handler, ...opts });
   };
   /** Runs a change the loop may refuse during a turn; a refusal is a 409. */
   const guarded = (fn: () => void) => {
@@ -202,6 +216,77 @@ export function createApi(opts: ApiOptions): http.Server {
     };
   });
 
+  // ── the workspace ───────────────────────────────────────────────────────
+  const workspace = new Workspace(cfg.workspace);
+  const wsPath = (query: URLSearchParams) => query.get("path") ?? "";
+  const ifMatch = (headers: http.IncomingHttpHeaders) => {
+    const v = headers["if-match"];
+    return typeof v === "string" ? v.replace(/^W\//, "").replace(/^"|"$/g, "") : undefined;
+  };
+  const tableArg = (v: unknown) => {
+    if (typeof v !== "string" || !v) throw new HttpError(400, "table must be a non-empty string");
+    return v;
+  };
+  const rowidArg = (v: unknown) => {
+    const n = Number(v);
+    if (!Number.isInteger(n)) throw new HttpError(400, "rowid must be an integer");
+    return n;
+  };
+  const valuesArg = (v: unknown) => {
+    if (!v || typeof v !== "object" || Array.isArray(v)) throw new HttpError(400, "values must be an object");
+    return v as Record<string, unknown>;
+  };
+  route("GET", "/api/v1/workspace/files", ({ query }) => workspace.list(wsPath(query)));
+  route("GET", "/api/v1/workspace/file", ({ query }) => {
+    const { entry, bytes } = workspace.read(wsPath(query));
+    return new Raw(
+      {
+        // Bytes a browser does not run: an HTML file the agent wrote cannot act on the UI's origin.
+        "content-type": "application/octet-stream",
+        "content-security-policy": "sandbox",
+        etag: `"${entry.version}"`,
+        "last-modified": new Date(entry.modified).toUTCString(),
+        ...(query.get("download") === "true" && {
+          "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(entry.name)}`,
+        }),
+      },
+      bytes,
+    );
+  });
+  route(
+    "PUT",
+    "/api/v1/workspace/file",
+    ({ query, bytes, headers }) => workspace.write(wsPath(query), bytes, ifMatch(headers)),
+    { bytes: true },
+  );
+  route("DELETE", "/api/v1/workspace/file", ({ query, headers }) => {
+    workspace.remove(wsPath(query), ifMatch(headers));
+    return { deleted: wsPath(query) };
+  });
+  route("GET", "/api/v1/workspace/db/tables", ({ query }) => ({ tables: workspace.tables(wsPath(query)) }));
+  route("GET", "/api/v1/workspace/db/rows", ({ query }) =>
+    workspace.rows(
+      wsPath(query),
+      tableArg(query.get("table")),
+      Number(query.get("offset")) || 0,
+      positive(query.get("limit"), 100),
+    ),
+  );
+  route("POST", "/api/v1/workspace/db/rows", ({ query, body }) =>
+    workspace.insert(wsPath(query), tableArg(body.table), valuesArg(body.values)),
+  );
+  route("PUT", "/api/v1/workspace/db/rows", ({ query, body }) =>
+    workspace.update(wsPath(query), tableArg(body.table), rowidArg(body.rowid), valuesArg(body.values)),
+  );
+  route("DELETE", "/api/v1/workspace/db/rows", ({ query }) =>
+    workspace.deleteRow(wsPath(query), tableArg(query.get("table")), rowidArg(query.get("rowid"))),
+  );
+  route("POST", "/api/v1/workspace/db/sql", ({ query, body }) => {
+    if (typeof body.sql !== "string" || !body.sql.trim()) throw new HttpError(400, "sql must be a non-empty string");
+    if (body.args !== undefined && !Array.isArray(body.args)) throw new HttpError(400, "args must be an array");
+    return workspace.sql(wsPath(query), body.sql, (body.args as unknown[] | undefined) ?? []);
+  });
+
   const allowedHosts = hostsFor(cfg.apiAddr);
 
   return http.createServer(async (req, res) => {
@@ -218,20 +303,29 @@ export function createApi(opts: ApiOptions): http.Server {
         throw new HttpError(other ? 405 : 404, other ? `${method} not allowed here` : "no such endpoint");
       }
       let body: Record<string, unknown> = {};
+      let bytes: Buffer = Buffer.alloc(0);
       if (method !== "GET") {
         const origin = req.headers.origin;
         if (origin && new URL(origin).host !== req.headers.host) throw new HttpError(403, "cross-origin write refused");
-        if (!(req.headers["content-type"] ?? "").startsWith("application/json")) {
-          throw new HttpError(415, "send a JSON body (content-type: application/json)");
+        // Neither type is one a cross-site form can send.
+        const want = found.bytes ? "application/octet-stream" : "application/json";
+        if (!(req.headers["content-type"] ?? "").startsWith(want)) {
+          throw new HttpError(415, `send the body as ${want}`);
         }
-        body = await readBody(req);
+        bytes = await readBytes(req, found.bytes ? MAX_FILE_BYTES : MAX_BODY);
+        if (!found.bytes) body = parseObject(bytes);
       }
       const m = found.pattern.exec(url.pathname) as RegExpExecArray;
       const params = Object.fromEntries(found.keys.map((k, i) => [k, decodeURIComponent(m[i + 1] ?? "")]));
-      const out = await found.handler({ params, query: url.searchParams, body });
+      const out = await found.handler({ params, query: url.searchParams, body, bytes, headers: req.headers });
+      if (out instanceof Raw) {
+        res.writeHead(200, { ...out.headers, "cache-control": "no-store", "x-content-type-options": "nosniff" });
+        res.end(out.body);
+        return;
+      }
       send(res, 200, out ?? null);
     } catch (err) {
-      const status = err instanceof HttpError ? err.status : 500;
+      const status = err instanceof HttpError || err instanceof WorkspaceError ? err.status : 500;
       if (status >= 500) log.error("request failed", { method, path: url.pathname, error: err });
       send(res, status, { error: { message: err instanceof Error ? err.message : String(err) } } satisfies ErrorBody);
     }
@@ -251,30 +345,32 @@ function send(res: http.ServerResponse, status: number, body: unknown): void {
   res.end(text);
 }
 
-function readBody(req: http.IncomingMessage): Promise<Record<string, unknown>> {
+function readBytes(req: http.IncomingMessage, max: number): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let size = 0;
     req.on("data", (c: Buffer) => {
       size += c.length;
-      if (size > MAX_BODY) {
+      if (size > max) {
         reject(new HttpError(413, "body too large"));
         req.destroy();
       } else chunks.push(c);
     });
-    req.on("end", () => {
-      const raw = Buffer.concat(chunks).toString("utf8");
-      if (!raw.trim()) return resolve({});
-      try {
-        const v = JSON.parse(raw) as unknown;
-        if (!v || typeof v !== "object" || Array.isArray(v)) throw new Error("not an object");
-        resolve(v as Record<string, unknown>);
-      } catch {
-        reject(new HttpError(400, "the body must be a JSON object"));
-      }
-    });
+    req.on("end", () => resolve(Buffer.concat(chunks)));
     req.on("error", reject);
   });
+}
+
+function parseObject(bytes: Buffer): Record<string, unknown> {
+  const raw = bytes.toString("utf8");
+  if (!raw.trim()) return {};
+  try {
+    const v = JSON.parse(raw) as unknown;
+    if (!v || typeof v !== "object" || Array.isArray(v)) throw new Error("not an object");
+    return v as Record<string, unknown>;
+  } catch {
+    throw new HttpError(400, "the body must be a JSON object");
+  }
 }
 
 const TYPES: Record<string, string> = {
