@@ -541,3 +541,16 @@ test("every child process is recorded, with its source, output and result, and a
     server.close();
   }
 });
+
+test("the context warning survives a restart", async () => {
+  const { five, cfg } = make([{ content: "a", tokens: 900 }], { FIVE_CONTEXT_TOKENS: "1000" });
+  await turn(five);
+  await five.close();
+  open.splice(open.indexOf(five), 1);
+  const model = scripted([{ content: "b" }]);
+  const again = createFive(cfg, model);
+  open.push(again);
+  assert.equal(again.loop.status().promptTokens, 900);
+  await turn(again);
+  assert.match(model.requests[0]?.at(-1)?.content as string, /^\[five\] Your context is 900 of 1,000 tokens/);
+});

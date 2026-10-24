@@ -84,6 +84,8 @@ export class Loop {
     this.o = { log: noopLogger, ...opts, ...(opts.log && { log: opts.log.child({ component: "loop" }) }) };
     this.ctx = opts.state.loadContext() ?? this.seed();
     if (!opts.state.loadContext()) opts.state.saveContext(this.ctx);
+    // The last call's size outlives a restart, so the first turn after one is warned too.
+    this.promptTokens = Number(opts.state.getMeta("prompt_tokens")) || null;
   }
 
   status(): LoopStatus {
@@ -160,6 +162,7 @@ export class Loop {
       ...(opts.next?.trim() && { next: opts.next }),
     });
     this.promptTokens = null;
+    this.o.state.setMeta("prompt_tokens", "");
     this.o.state.clearEvents();
     this.save();
     this.o.log.info("context reset");
@@ -265,6 +268,7 @@ export class Loop {
         });
         const durationMs = Math.round(performance.now() - t0);
         this.promptTokens = completion.usage?.prompt_tokens ?? this.promptTokens;
+        if (this.promptTokens !== null) this.o.state.setMeta("prompt_tokens", String(this.promptTokens));
         let { message } = completion;
         let fromText = false;
         if (!message.tool_calls?.length && message.content) {
