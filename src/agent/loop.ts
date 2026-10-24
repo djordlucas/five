@@ -69,6 +69,8 @@ export class Loop {
   private failures = 0;
   /** Turns in a row that ended without a tool call. */
   private idle = 0;
+  /** The prompt the current turn started with. */
+  private turnPrompt = "";
   private retryAt: number | null = null;
   private abort?: AbortController;
   /** Interrupts the wait between turns. */
@@ -236,7 +238,8 @@ export class Loop {
     const log = this.o.log.child({ turn });
     const started = performance.now();
     const prompt = ctx.next;
-    const warning = this.contextWarning();
+    const warning = [this.idleWarning(), this.contextWarning()].filter(Boolean).join("\n\n") || undefined;
+    this.turnPrompt = prompt;
     const opening: Message = { role: "user", content: warning ? `${warning}\n\n${prompt}` : prompt };
     ctx.messages.push(opening);
     this.save();
@@ -377,6 +380,12 @@ export class Loop {
     return `${result.slice(0, resultChars)}\n… [${result.length - resultChars} more characters; the whole result is in ${rel}]`;
   }
 
+  /** The note a turn's prompt starts with after a turn that made no tool call, which left the prompt to repeat. */
+  private idleWarning(): string | undefined {
+    if (this.idle === 0) return undefined;
+    return "[five] Your last turn made no tool call, so this prompt repeats and that turn was wasted. Do the next piece of work now. If your goal is done, rewrite ## Goal in your system prompt with a new goal and start it. End the turn with end_turn(summary, next), where next says what to do — not what was done.";
+  }
+
   /** The warning a turn's prompt starts with when the last call filled most of the window. */
   private contextWarning(): string | undefined {
     const { contextWarn = 0, contextTokens } = this.o;
@@ -457,6 +466,7 @@ export class Loop {
       ...(this.promptTokens !== null && { promptTokens: this.promptTokens }),
       contextTokens: this.o.contextTokens,
       workspace: this.o.workspace,
+      turnPrompt: this.turnPrompt,
       changed: (change) => {
         this.emit({ type: "context", by: "model", change });
         this.o.log.info("context changed", { by: "model", change });
