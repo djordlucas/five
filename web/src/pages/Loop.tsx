@@ -104,32 +104,29 @@ function Controls() {
       <div class={styles.actions}>
         {loop.retryAt && <Badge state="warn">retry at {clock(loop.retryAt)}</Badge>}
         {loop.running ? (
-          <button type="button" class={styles.action} onClick={() => void act('pause')} title="Stop looping once this turn ends">
+          <button type="button" class="button" onClick={() => void act('pause')} title="Stop looping once this turn ends">
             Pause
           </button>
         ) : (
-          <button type="button" class={`${styles.action} ${styles.primary}`} onClick={() => void act('start')}>
+          <button type="button" class="button" onClick={() => void act('start')}>
             Start
           </button>
         )}
-        <button
-          type="button"
-          class={styles.action}
-          disabled={loop.running || loop.busy}
-          onClick={() => void act('step')}
-          title="Run one turn"
-        >
-          Step
-        </button>
-        <button
-          type="button"
-          class={`${styles.action} ${styles.danger}`}
-          disabled={!loop.busy}
-          onClick={() => void act('stop')}
-          title="Pause, and end this turn now"
-        >
-          Stop turn
-        </button>
+        {!loop.running && !loop.busy && (
+          <button type="button" class="button" onClick={() => void act('step')} title="Run one turn">
+            Step
+          </button>
+        )}
+        {loop.busy && (
+          <button
+            type="button"
+            class={`button ${styles.stop}`}
+            onClick={() => void act('stop')}
+            title="Pause, and end this turn now"
+          >
+            Stop turn
+          </button>
+        )}
       </div>
       <div class={styles.window}>
         <Meter value={used} max={s.contextTokens} warnAt={s.contextTokens * 0.8} label="Context window used" />
