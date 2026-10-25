@@ -85,15 +85,30 @@ function Controls() {
     }
   };
   const used = loop.promptTokens ?? 0;
+  const facts = [
+    loop.busy ? `step ${loop.step} of ${s.maxSteps}` : loop.running ? 'between turns' : 'paused',
+    `${s.messages} messages`,
+    loop.promptTokens === null
+      ? 'context not measured yet'
+      : `${used.toLocaleString()} of ${s.contextTokens.toLocaleString()} tokens`,
+  ];
   return (
-    <div class={`card ${styles.controls}`}>
-      <div class={styles.buttons}>
+    <header class={styles.bar}>
+      <div class={styles.title}>
+        <h2>
+          Turn {loop.turn} · {s.model}
+          {s.think && ' · thinking'}
+        </h2>
+        <span class="muted">{facts.join(' · ')}</span>
+      </div>
+      <div class={styles.actions}>
+        {loop.retryAt && <Badge state="warn">retry at {clock(loop.retryAt)}</Badge>}
         {loop.running ? (
-          <button type="button" class="button" onClick={() => void act('pause')} title="Stop looping once this turn ends">
+          <button type="button" class={styles.action} onClick={() => void act('pause')} title="Stop looping once this turn ends">
             Pause
           </button>
         ) : (
-          <button type="button" class="button" onClick={() => void act('start')}>
+          <button type="button" class={`${styles.action} ${styles.primary}`} onClick={() => void act('start')}>
             Start
           </button>
         )}
@@ -116,26 +131,11 @@ function Controls() {
           Stop turn
         </button>
       </div>
-      <div class={styles.facts}>
-        <span>
-          {s.model}
-          {s.think && ' · thinking'}
-        </span>
-        <span>
-          turn {loop.turn}
-          {loop.busy && ` · step ${loop.step} of ${s.maxSteps}`}
-        </span>
-        <span>{s.messages} messages</span>
-        {loop.retryAt && <Badge state="warn">retry at {clock(loop.retryAt)}</Badge>}
-      </div>
       <div class={styles.window}>
         <Meter value={used} max={s.contextTokens} warnAt={s.contextTokens * 0.8} label="Context window used" />
-        <span class="muted">
-          {loop.promptTokens === null ? 'context not measured yet' : `${used.toLocaleString()} of ${s.contextTokens.toLocaleString()} tokens`}
-        </span>
       </div>
       {error && <p class="error">{error}</p>}
-    </div>
+    </header>
   );
 }
 

@@ -5,30 +5,58 @@
   min-width: 0;
 }
 
-.controls {
+/* The controls, as a bar pinned to the top of the page, like nine's chat header. */
+.bar {
   position: sticky;
   top: 0;
   z-index: 1;
-  display: grid;
-  gap: var(--space-3);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  margin: calc(-1 * var(--space-3)) calc(-1 * var(--space-6)) 0;
+  padding: var(--space-3) var(--space-6);
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
 }
 
-.controls .error {
+.bar .error {
+  flex-basis: 100%;
   margin: 0;
 }
 
-.buttons {
+.title {
+  flex: 1 1 200px;
+  min-width: 0;
+  display: grid;
+  font-variant-numeric: tabular-nums;
+}
+
+.title h2 {
+  font-size: var(--text-lg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.title span {
+  font-size: var(--text-sm);
+}
+
+.actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: var(--space-2);
 }
 
 .action {
-  min-height: var(--touch);
-  padding: 0 var(--space-4);
+  min-height: 36px;
+  padding: 0 var(--space-3);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
+  font-size: var(--text-sm);
   cursor: pointer;
 }
 
@@ -41,25 +69,23 @@
   cursor: default;
 }
 
+.primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+.primary:hover:not(:disabled) {
+  background: var(--accent);
+  opacity: 0.9;
+}
+
 .danger {
   color: var(--danger);
 }
 
-.facts {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-1) var(--space-4);
-  font-size: var(--text-sm);
-  color: var(--text-2);
-  font-variant-numeric: tabular-nums;
-}
-
 .window {
-  display: grid;
-  gap: var(--space-1);
-  font-size: var(--text-sm);
-  font-variant-numeric: tabular-nums;
+  flex-basis: 100%;
 }
 
 .more {
@@ -233,6 +259,11 @@
 }
 
 @media (max-width: 767px) {
+  .bar {
+    margin: calc(-1 * var(--space-2)) calc(-1 * var(--space-4)) 0;
+    padding: var(--space-2) var(--space-4);
+  }
+
   .prompt {
     max-width: 90%;
   }
