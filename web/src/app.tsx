@@ -7,6 +7,7 @@ import { Inbox } from './pages/Inbox';
 import { Loop } from './pages/Loop';
 import { NotFound } from './pages/NotFound';
 import { Processes } from './pages/Processes';
+import { Supervisor } from './pages/Supervisor';
 import { Tools } from './pages/Tools';
 import { Workspace } from './pages/Workspace';
 
@@ -23,6 +24,7 @@ export function App() {
           <Route path="/" component={Loop} />
           <Route path="/context" component={Context} />
           <Route path="/inbox" component={Inbox} />
+          <Route path="/supervisor" component={Supervisor} />
           <Route path="/tools/:name" component={Tools} />
           <Route path="/tools" component={Tools} />
           <Route path="/workspace" component={Workspace} />

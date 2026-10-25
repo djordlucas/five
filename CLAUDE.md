@@ -4,7 +4,8 @@
   carry `.ts`. Web UI in `web/` (Preact + Vite) imports only `src/api/types.ts`.
 - Much is copied from `../seven`: the runner, tool store, built-ins, Ollama
   client, logging, web tokens. Keep those close to seven's so fixes port over.
-- Five's own parts: `src/agent/loop.ts` (the supervisor loop),
+- Five's own parts: `src/agent/loop.ts` (the loop), `src/agent/supervisor.ts`
+  (every guard and nudge, and their live settings),
   `src/agent/context.ts` (context tools), `src/agent/prompt.ts` (the seed),
   `src/state.ts`, `src/api/server.ts`.
 - Verify with `make ci-host` (or `make ci`) before committing.

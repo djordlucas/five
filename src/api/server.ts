@@ -22,6 +22,7 @@ import type {
   InboxMessage,
   InboxPage,
   Status,
+  SupervisorView,
   ToolDetail,
   ToolInfo,
 } from "./types.ts";
@@ -188,6 +189,21 @@ export function createApi(opts: ApiOptions): http.Server {
       }),
     ),
   );
+
+  // ── the supervisor ──────────────────────────────────────────────────────
+  route("GET", "/api/v1/supervisor", (): SupervisorView => loop.supervisor.view());
+  route("PUT", "/api/v1/supervisor", ({ body }): SupervisorView => {
+    try {
+      loop.supervisor.update(body);
+    } catch (err) {
+      throw new HttpError(400, err instanceof Error ? err.message : String(err));
+    }
+    return loop.supervisor.view();
+  });
+  route("DELETE", "/api/v1/supervisor", (): SupervisorView => {
+    loop.supervisor.resetSettings();
+    return loop.supervisor.view();
+  });
 
   // ── the inbox ───────────────────────────────────────────────────────────
   route("GET", "/api/v1/inbox", (): InboxPage => ({ messages: state.listInbox() }));

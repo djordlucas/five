@@ -10,6 +10,9 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Message, ToolDef } from "../llm/model.ts";
 import type { Context } from "../state.ts";
+import { MEMORY_DIR, SELF_NOTE } from "./supervisor.ts";
+
+export { MEMORY_DIR, SELF_NOTE } from "./supervisor.ts";
 
 export interface ContextTool extends ToolDef {
   run(args: Record<string, unknown>, env: ContextEnv): string;
@@ -30,19 +33,17 @@ export interface ContextEnv {
   endTurn(summary?: string): void;
   /** Five's self block, as the next model call will send it. */
   selfBlock(): string;
-  /** Puts a message in the person's inbox; an error when one was sent this turn already. */
+  /** Puts a message in the person's inbox; an error when this turn sent its share. */
   sendMessage(text: string): string;
+  /** Why a next prompt would waste the next turn, if it would. */
+  checkNext(text: string): string | undefined;
+  /** Why the self note may not be this long, if it may not. */
+  checkSelfNote(length: number): string | undefined;
 }
 
 /** Characters of each message read_context shows unless asked for full text. */
 const PREVIEW_CHARS = 200;
-/** The memory directory, in the workspace. */
-export const MEMORY_DIR = "memory";
 const NOTE_NAME = /^[a-z0-9][a-z0-9_-]{0,63}$/;
-/** The note five's self block sends with every call. */
-export const SELF_NOTE = "self";
-/** The longest the self note may be. */
-export const SELF_NOTE_CHARS = 1500;
 
 export const contextTools: ContextTool[] = [
   {
@@ -69,7 +70,7 @@ export const contextTools: ContextTool[] = [
       const lines = [
         `Tokens used by the last model call: ${used}. When the window is full, the oldest text is silently lost.`,
         `Turn ${ctx.turn}. Next prompt: ${JSON.stringify(ctx.next)}`,
-        `System prompt: ${ctx.system.length} characters. Five's self block, after your messages: ${env.selfBlock().length} characters.`,
+        `System prompt: ${ctx.system.length} characters. Five's self block, after your messages: ${env.selfBlock() ? `${env.selfBlock().length} characters` : "off"}.`,
         ctx.messages.length === 0
           ? "Messages: none."
           : `Messages: ${ctx.messages.length} (indices 0–${last}); showing ${start}–${end}.`,
@@ -199,7 +200,7 @@ export const contextTools: ContextTool[] = [
     },
     run(a, env) {
       const text = String(a.text);
-      const bad = checkNext(text, env);
+      const bad = env.checkNext(text);
       if (bad) return bad;
       env.ctx.next = text;
       env.changed("next prompt set");
@@ -228,9 +229,8 @@ export const contextTools: ContextTool[] = [
       const text = String(a.text);
       if (name === SELF_NOTE) {
         const before = a.append === true && fs.existsSync(file) ? fs.readFileSync(file, "utf8").length : 0;
-        if (before + text.length > SELF_NOTE_CHARS) {
-          return `error: the ${SELF_NOTE} note is sent with every call, so it is kept to ${SELF_NOTE_CHARS} characters; this would make it ${before + text.length}. Rewrite it shorter.`;
-        }
+        const bad = env.checkSelfNote(before + text.length);
+        if (bad) return bad;
       }
       if (!text.trim() && a.append !== true) {
         if (!fs.existsSync(file)) return `error: there is no note "${name}"`;
@@ -318,7 +318,7 @@ export const contextTools: ContextTool[] = [
     },
     run(a, env) {
       const next = typeof a.next === "string" ? a.next.trim() : "";
-      const bad = next ? checkNext(next, env) : undefined;
+      const bad = next ? env.checkNext(next) : undefined;
       if (bad) return `${bad}. The turn goes on: call end_turn again with a next prompt that does.`;
       if (next) {
         env.ctx.next = next;
@@ -344,37 +344,6 @@ function label(m: Message): string {
   }
   return m.role;
 }
-
-/** Why a next prompt would waste the next turn, if it would. */
-function checkNext(text: string, env: ContextEnv): string | undefined {
-  const t = text.trim();
-  if (!t) return "error: the next prompt cannot be empty";
-  if (t === env.turnPrompt.trim()) {
-    return "error: that is this turn's own prompt, so the next turn would redo this one; say what to do next";
-  }
-  if (WAITING.test(t)) {
-    return (
-      "error: the next prompt waits — for a user, a request or approval — and a prompt is answered by no one: the turn " +
-      "would be wasted. To ask the person, use message_person; a reply comes before a later turn, if at all. Decide " +
-      "what to do next yourself and say it; if your goal is done, rewrite ## Goal with a new one and start it"
-    );
-  }
-  if (DONE_REPORT.test(t)) {
-    return (
-      "error: the next prompt reports what is done instead of saying what to do next. Put the report in the summary; " +
-      "make the next prompt an instruction, and if your goal is done, rewrite ## Goal with a new one and start it"
-    );
-  }
-  return undefined;
-}
-
-/** A next prompt that waits for someone: "Awaiting user request …", "Maintain standby mode …". */
-const WAITING =
-  /\b(awaiting|wait(ing)? (for|on|until) (the |a |an |further |new )?(user|request|instruction|input|approval|reply|response|feedback|direction)|stand(ing)?[ -]?by|on hold|until (the )?user|user('s)? (request|input|instruction|reply|response|approval))/i;
-
-/** A next prompt that opens by reporting a finished turn or goal: "Turn 22 complete", "End turn …", "Done …". */
-const DONE_REPORT =
-  /^(\W*)(turn \d+ (is )?(complete|completed|done|finished|over)\b|end(ing)? (of )?turn\b|(all )?done\b|complete[d!.]|finished\b|goal (is )?(complete|achieved|done))/i;
 
 function notePath(env: ContextEnv, name: string): string {
   return path.join(env.workspace, MEMORY_DIR, `${name}.md`);

@@ -2,6 +2,7 @@
 // present; the container sets the same variables.
 
 import * as path from "node:path";
+import { DEFAULTS, type SupervisorSettings } from "./agent/supervisor.ts";
 import { OLLAMA_ENDPOINT } from "./llm/ollama.ts";
 import { type Level, parseLevel } from "./log.ts";
 
@@ -28,16 +29,8 @@ export interface Config {
   runMemoryMb: number;
   /** Pause between two turns. */
   turnDelayMs: number;
-  /** Share of the window (0–1) above which a turn's prompt starts with a warning; 0 turns it off. */
-  contextWarn: number;
-  /** Share of the window (0–1) above which five drops the oldest messages before a turn; 0 turns it off. */
-  contextTrim: number;
-  /** Fold a turn that ends with a reply into that reply. */
-  foldReplies: boolean;
-  /** Turns in a row without a tool call after which the loop pauses; 0 never. */
-  idleTurns: number;
-  /** A result of a run longer than this, in characters, goes to a file and its start to the context; 0 never. */
-  resultChars: number;
+  /** The supervisor's settings, before any change made through the API: see src/agent/supervisor.ts. */
+  supervisor: SupervisorSettings;
   /** Start looping as soon as five starts, even if it was paused when it last stopped. */
   autostart: boolean;
   /** Where the HTTP API and web UI listen (host:port). */
@@ -63,15 +56,25 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     runTimeoutMs: int(env.FIVE_RUN_TIMEOUT_MS, 60_000),
     runMemoryMb: int(env.FIVE_RUN_MEMORY_MB, 1024),
     turnDelayMs: int(env.FIVE_TURN_DELAY_MS, 1000),
-    contextWarn: Math.min(int(env.FIVE_CONTEXT_WARN, 60), 100) / 100,
-    contextTrim: Math.min(int(env.FIVE_CONTEXT_TRIM, 85), 100) / 100,
-    foldReplies: flag(env.FIVE_FOLD_REPLIES ?? "on", "FIVE_FOLD_REPLIES"),
-    idleTurns: int(env.FIVE_IDLE_TURNS, 3),
-    resultChars: int(env.FIVE_RESULT_CHARS, 3000),
+    supervisor: supervisorDefaults(env),
     autostart: flag(env.FIVE_AUTOSTART, "FIVE_AUTOSTART"),
     apiAddr: env.FIVE_API_ADDR ?? "127.0.0.1:5555",
     logLevel: parseLevel(env.FIVE_LOG_LEVEL, "info"),
     logFile: env.FIVE_LOG_FILE === "off" ? "" : path.resolve(workspace, env.FIVE_LOG_FILE ?? ".five/five.log"),
+  };
+}
+
+/** The supervisor's defaults, with what the environment sets. FIVE_FOLD_REPLIES=off also keeps idle turns. */
+function supervisorDefaults(env: NodeJS.ProcessEnv): SupervisorSettings {
+  const fold = flag(env.FIVE_FOLD_REPLIES ?? "on", "FIVE_FOLD_REPLIES");
+  return {
+    ...DEFAULTS,
+    contextWarn: Math.min(int(env.FIVE_CONTEXT_WARN, DEFAULTS.contextWarn), 100),
+    contextTrim: Math.min(int(env.FIVE_CONTEXT_TRIM, DEFAULTS.contextTrim), 100),
+    foldReplies: fold,
+    dropIdle: fold,
+    idleTurns: int(env.FIVE_IDLE_TURNS, DEFAULTS.idleTurns),
+    resultChars: Math.min(int(env.FIVE_RESULT_CHARS, DEFAULTS.resultChars), 16_000),
   };
 }
 

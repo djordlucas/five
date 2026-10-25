@@ -48,7 +48,9 @@ export type EventBody =
   | { type: "context"; by: "model" | "user" | "five"; change: string }
   /** A message in the inbox: five's to the person, or the person's to five. */
   | { type: "inbox"; from: InboxMessage["from"]; text: string }
-  | { type: "loop"; state: "started" | "paused"; reason?: string };
+  | { type: "loop"; state: "started" | "paused"; reason?: string }
+  /** The supervisor's settings changed, from the API. */
+  | { type: "supervisor"; change: string };
 
 export type Event = EventBody & { seq: number; at: string; turn: number };
 
@@ -218,4 +220,45 @@ export interface ProcessDetail extends ProcessInfo {
   logs: string[];
   /** Its result, once it finished well. */
   value?: unknown;
+}
+
+/** How the supervisor steps into the loop: see src/agent/supervisor.ts. Shares are percent of the window. */
+export interface SupervisorSettings {
+  contextWarn: number;
+  contextTrim: number;
+  trimTo: number;
+  foldReplies: boolean;
+  replySummaryChars: number;
+  dropIdle: boolean;
+  idleTurns: number;
+  staleTurns: number;
+  refuseRepeat: boolean;
+  refuseDone: boolean;
+  refuseWaiting: boolean;
+  selfBlock: boolean;
+  selfNoteChars: number;
+  messagesPerTurn: number;
+  resultChars: number;
+}
+
+/** One setting, as the web UI shows it: a flag when its value is a boolean, else a whole number. */
+export interface SupervisorField {
+  key: keyof SupervisorSettings;
+  group: string;
+  label: string;
+  help: string;
+  unit?: string;
+  min?: number;
+  max?: number;
+}
+
+export interface SupervisorView {
+  settings: SupervisorSettings;
+  /** The settings the environment gives; a reset goes back to them. */
+  defaults: SupervisorSettings;
+  /** The settings changed from their defaults. */
+  changed: (keyof SupervisorSettings)[];
+  fields: SupervisorField[];
+  /** What the supervisor counts now. */
+  state: { idle: number; stale: number };
 }
