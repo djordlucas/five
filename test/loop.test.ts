@@ -599,12 +599,14 @@ test("a nearly full context has its oldest messages dropped before the turn", as
   assert.ok(change);
 });
 
-test("a turn that ends with a reply is folded into it", async () => {
+test("a turn that ends with a reply is folded into it if it did work, and leaves nothing if not", async () => {
   const { five } = make(
     [
-      { calls: [["read_context", {}]] },
-      { content: "Read my context and found it empty." },
+      { calls: [["memory_write", { name: "plan", text: "Map the coast." }]] },
+      { content: "Saved my plan." },
       { calls: [["end_turn", { summary: "Ended.", next: "Go on." }]] },
+      { calls: [["read_context", {}]] },
+      { content: "I will map the coast next." },
       { content: "  " },
     ],
     { FIVE_FOLD_REPLIES: "on" },
@@ -612,17 +614,39 @@ test("a turn that ends with a reply is folded into it", async () => {
   await turn(five);
   assert.deepEqual(
     five.loop.ctx.messages.map((m) => m.content),
-    ["[Turn 1, summarized] Read my context and found it empty."],
+    ["[Turn 1, summarized] Saved my plan."],
   );
+  // end_turn's summary wins, even after no work.
+  await turn(five);
+  assert.equal(five.loop.ctx.messages[1]?.content, "[Turn 2, summarized] Ended.");
+  // Reading and replying is no work: the turn is dropped, as is one with an empty reply.
   await turn(five);
   await turn(five);
-  // end_turn's summary wins; an empty reply leaves the turn as it is.
-  const msgs = five.loop.ctx.messages;
-  assert.equal(msgs[1]?.content, "[Turn 2, summarized] Ended.");
   assert.deepEqual(
-    msgs.slice(2).map((m) => m.role),
-    ["user", "assistant"],
+    five.loop.ctx.messages.map((m) => m.content),
+    ["[Turn 1, summarized] Saved my plan.", "[Turn 2, summarized] Ended."],
   );
+  const dropped = five.state.eventsAfter(0, 100).filter((e) => e.type === "context" && e.by === "five");
+  assert.equal(dropped.length, 2);
+});
+
+test("a next prompt unchanged for three turns gets a note", async () => {
+  const work: Reply = { calls: [["memory_write", { name: "n", text: "x" }]] };
+  const { five, model } = make([
+    work,
+    { content: "a" },
+    work,
+    { content: "b" },
+    work,
+    { content: "c" },
+    { content: "d" },
+  ]);
+  await turn(five);
+  await turn(five);
+  await turn(five);
+  assert.doesNotMatch(model.requests[4]?.at(-1)?.content as string, /has not changed/);
+  await turn(five);
+  assert.match(model.requests[6]?.at(-1)?.content as string, /^\[five\] Your next prompt has not changed for 3 turns/);
 });
 
 test("every call ends with five's self block, with the self note; the system prompt stays as it is", async () => {

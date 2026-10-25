@@ -10,8 +10,10 @@
 // most of the window, the turn's prompt starts with a warning, and when it
 // filled nearly all of it, five drops the oldest messages itself; and turns
 // that do no work, several in a row, pause the loop. A turn is folded into
-// the summary the agent ends it with, or into its last reply, and a long
-// result of a run is kept in a file, with only its start in the context.
+// the summary the agent ends it with, or into its last reply when it did
+// work; one that ends with a reply and did no work leaves nothing. A next
+// prompt left unchanged for several turns gets a note. A long result of a run
+// is kept in a file, with only its start in the context.
 //
 // Every model call also ends with five's self block, after the messages: who
 // the agent is, how full its working memory is, what it has built, and its own
@@ -51,6 +53,8 @@ const MAX_RESULT_CHARS = 16_000;
 const NO_WORK = new Set(["read_context", "memory_read", "set_next_prompt", "end_turn", "message_person"]);
 /** Where long results of runs are kept, in the workspace. */
 export const RESULTS_DIR = "results";
+/** Turns in a row that start with the same prompt before the prompt says it may be stale. */
+const STALE_TURNS = 3;
 /** The longest last reply a turn is folded into. */
 const MAX_REPLY_SUMMARY_CHARS = 1500;
 /** Share of the window a trim aims to leave the context at. */
@@ -93,6 +97,8 @@ export class Loop {
   private failures = 0;
   /** Turns in a row that did no work: no tool call beyond reading and ending the turn. */
   private idle = 0;
+  /** Turns in a row that started with the prompt the turn before started with. */
+  private stale = 0;
   /** The prompt the current turn started with. */
   private turnPrompt = "";
   /** Whether this turn sent the person a message already. */
@@ -229,6 +235,7 @@ export class Loop {
       ...(opts.next?.trim() && { next: opts.next }),
     });
     this.promptTokens = null;
+    this.stale = 0;
     this.o.state.setMeta("prompt_tokens", "");
     this.o.state.setMeta("born", "");
     this.o.state.clearEvents();
@@ -315,8 +322,9 @@ export class Loop {
     if (!this.o.state.getMeta("born")) this.o.state.setMeta("born", new Date().toISOString());
     const trimmed = this.trim();
     const warning =
-      [this.idleWarning(), trimmed ?? this.contextWarning(), this.deliver(turn)].filter(Boolean).join("\n\n") ||
-      undefined;
+      [this.idleWarning(), trimmed ?? this.contextWarning(), this.staleWarning(), this.deliver(turn)]
+        .filter(Boolean)
+        .join("\n\n") || undefined;
     this.turnPrompt = prompt;
     this.messaged = false;
     const opening: Message = { role: "user", content: warning ? `${warning}\n\n${prompt}` : prompt };
@@ -373,9 +381,12 @@ export class Loop {
         });
         if (!message.tool_calls?.length) {
           reason = "replied";
-          // A small model often forgets end_turn: its last reply stands in for the summary.
+          // A small model often forgets end_turn: its last reply stands in for the summary. A turn that
+          // did no work leaves nothing: its reply would only say what it meant to do, and a context
+          // full of those, alike, gets copied rather than acted on.
           const reply = message.content?.trim();
-          if (reply && this.o.foldReplies) this.fold(opening, clip(reply, MAX_REPLY_SUMMARY_CHARS));
+          if (this.o.foldReplies && !worked) this.drop(opening);
+          else if (this.o.foldReplies && reply) this.fold(opening, clip(reply, MAX_REPLY_SUMMARY_CHARS));
           break;
         }
 
@@ -423,6 +434,7 @@ export class Loop {
       this.busy = false;
       this.abort = undefined;
       this.idle = worked || reason === "stopped" || reason === "error" ? 0 : this.idle + 1;
+      if (reason !== "stopped" && reason !== "error") this.stale = ctx.next === prompt ? this.stale + 1 : 0;
       this.save();
       this.emit({ type: "turn_ended", reason, next: ctx.next, ...(error && { error }) });
       log[reason === "error" ? "error" : "info"]("turn ended", {
@@ -448,6 +460,17 @@ export class Loop {
     messages.splice(i, n, { role: "assistant", content: `[Turn ${turn}, summarized] ${summary}` });
     this.emit({ type: "context", by: "model", change: `turn ${turn}'s ${n} messages replaced by its summary` });
     this.o.log.info("turn folded", { turn, messages: n });
+  }
+
+  /** Remove the turn's messages, from its prompt on: a turn that did no work. */
+  private drop(opening: Message): void {
+    const { messages, turn } = this.ctx;
+    const i = messages.indexOf(opening);
+    if (i < 0) return;
+    const n = messages.length - i;
+    messages.splice(i, n);
+    this.emit({ type: "context", by: "five", change: `turn ${turn}'s ${n} messages dropped: it did no work` });
+    this.o.log.info("turn dropped", { turn, messages: n });
   }
 
   /** A run's result, cut to fit the context: a long one is kept whole in a file the context points to. */
@@ -502,6 +525,12 @@ export class Loop {
     );
     const lines = waiting.map((m) => `[The person wrote to you, during turn ${m.turn}] ${m.text}`);
     return `${lines.join("\n\n")}\n\n[five] Take it into account as you see fit; message_person answers. Your work goes on either way.`;
+  }
+
+  /** The note a turn's prompt starts with when the turns before all started with this same prompt. */
+  private staleWarning(): string | undefined {
+    if (this.stale < STALE_TURNS) return undefined;
+    return `[five] Your next prompt has not changed for ${this.stale} turns, so it may ask for work that is done. Read your progress notes, decide what comes next, and set it with end_turn(summary, next).`;
   }
 
   /** The note a turn's prompt starts with after a turn that did no work. */
