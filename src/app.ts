@@ -58,6 +58,7 @@ export function createFive(cfg: Config, model: ChatModel, log: Logger = noopLogg
     turnDelayMs: cfg.turnDelayMs,
     contextWarn: cfg.contextWarn,
     contextTrim: cfg.contextTrim,
+    foldReplies: cfg.foldReplies,
     idleTurns: cfg.idleTurns,
     resultChars: cfg.resultChars,
     log,

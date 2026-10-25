@@ -9,9 +9,9 @@
 // Five keeps out of the context but for its guards: when the last call filled
 // most of the window, the turn's prompt starts with a warning, and when it
 // filled nearly all of it, five drops the oldest messages itself; and turns
-// that do no work, several in a row, pause the loop. A turn the
-// agent ends with a summary is folded into it, and a long result of a run is
-// kept in a file, with only its start in the context.
+// that do no work, several in a row, pause the loop. A turn is folded into
+// the summary the agent ends it with, or into its last reply, and a long
+// result of a run is kept in a file, with only its start in the context.
 
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -38,6 +38,8 @@ const MAX_RESULT_CHARS = 16_000;
 const NO_WORK = new Set(["read_context", "memory_read", "set_next_prompt", "end_turn"]);
 /** Where long results of runs are kept, in the workspace. */
 export const RESULTS_DIR = "results";
+/** The longest last reply a turn is folded into. */
+const MAX_REPLY_SUMMARY_CHARS = 1500;
 /** Share of the window a trim aims to leave the context at. */
 const TRIM_TO = 0.5;
 /** Waits after a failed turn, doubling up to the last. */
@@ -58,6 +60,8 @@ export interface LoopOptions {
   contextWarn?: number;
   /** Share of the window above which five drops the oldest messages before a turn; 0 never. */
   contextTrim?: number;
+  /** Fold a turn that ends with a reply into that reply, as end_turn would into its summary. */
+  foldReplies?: boolean;
   /** Turns in a row without a tool call after which the loop pauses; 0 never. */
   idleTurns?: number;
   /** A result of a run longer than this goes to a file, its start to the context; 0 never. */
@@ -301,6 +305,9 @@ export class Loop {
         });
         if (!message.tool_calls?.length) {
           reason = "replied";
+          // A small model often forgets end_turn: its last reply stands in for the summary.
+          const reply = message.content?.trim();
+          if (reply && this.o.foldReplies) this.fold(opening, clip(reply, MAX_REPLY_SUMMARY_CHARS));
           break;
         }
 
@@ -542,6 +549,10 @@ function isFailure(result: string): boolean {
 function truncate(s: string): string {
   if (s.length <= MAX_RESULT_CHARS) return s;
   return `${s.slice(0, MAX_RESULT_CHARS)}\n… [truncated ${s.length - MAX_RESULT_CHARS} of ${s.length} characters]`;
+}
+
+function clip(text: string, max: number): string {
+  return text.length <= max ? text : `${text.slice(0, max)} … [cut]`;
 }
 
 /** A message's length in characters: its text and its calls. */

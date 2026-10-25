@@ -13,7 +13,7 @@ agent, one context, one SQLite file, Ollama.
 
 | Part | What it does |
 |---|---|
-| The loop | Each turn appends the **next prompt** to the context as a user message and sends the whole context to the model. The model makes as many tool calls as it likes (up to `FIVE_MAX_STEPS` model calls); the turn ends when it calls `end_turn` or replies without a call. The next turn starts with the prompt the agent set with `end_turn` or `set_next_prompt`, or the same one again. |
+| The loop | Each turn appends the **next prompt** to the context as a user message and sends the whole context to the model. The model makes as many tool calls as it likes (up to `FIVE_MAX_STEPS` model calls); the turn ends when it calls `end_turn` or replies without a call. A turn that ends with a reply is folded into it, as `end_turn` folds one into its summary (`FIVE_FOLD_REPLIES`). The next turn starts with the prompt the agent set with `end_turn` or `set_next_prompt`, or the same one again. |
 | The context | The system prompt, every message of every turn, and the next prompt. All of it is the agent's to change. Messages pile up until the agent deletes them, and Ollama silently drops the oldest text when the window (`FIVE_CONTEXT_TOKENS`) is full. |
 | Guards | Five keeps out of the context but for these. When the last model call used more than `FIVE_CONTEXT_WARN` percent of the window, the turn's prompt starts with a warning to save to memory and delete messages, naming the one `delete_messages` call that drops every earlier turn. Above `FIVE_CONTEXT_TRIM` percent, the model can no longer make that call, so five drops the oldest messages itself, down to about half the window, and the turn's prompt says so. A turn that does no work — no tool call beyond `read_context`, `memory_read`, `set_next_prompt` and `end_turn` — makes the next prompt start with a note to get back to work, or to set a new goal if the old one is done; `FIVE_IDLE_TURNS` such turns in a row pause the loop. `set_next_prompt` and `end_turn` refuse a next prompt that repeats the turn's own, opens by reporting what is done ("Turn 22 complete…"), or waits for a user ("Awaiting user request…", "standby"): none ever answers. |
 | Context tools | `read_context`, `set_system_prompt`, `edit_system_prompt`, `edit_message`, `insert_message`, `delete_messages`, `set_next_prompt`, `end_turn`. A change applies from the next model call. `end_turn(summary, next)` keeps the context in one call: the summary replaces every message of the turn, and `next` sets the next prompt. |
@@ -55,6 +55,7 @@ only; `.env.example` lists every variable:
 | `FIVE_TURN_DELAY_MS` | `1000` | pause between turns |
 | `FIVE_AUTOSTART` | `off` | start looping at startup even if it was paused |
 | `FIVE_CONTEXT_WARN` | `60` | percent of the window above which a turn's prompt starts with a warning; `0` off |
+| `FIVE_FOLD_REPLIES` | `on` | fold a turn that ends with a reply into that reply |
 | `FIVE_CONTEXT_TRIM` | `85` | percent of the window above which five drops the oldest messages before a turn; `0` off |
 | `FIVE_IDLE_TURNS` | `3` | turns in a row that do no work that pause the loop; `0` turns the guard and its note off |
 | `FIVE_RESULT_CHARS` | `3000` | a run's result longer than this goes to a file, its start to the context; `0` never |

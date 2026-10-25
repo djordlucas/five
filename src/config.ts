@@ -32,6 +32,8 @@ export interface Config {
   contextWarn: number;
   /** Share of the window (0–1) above which five drops the oldest messages before a turn; 0 turns it off. */
   contextTrim: number;
+  /** Fold a turn that ends with a reply into that reply. */
+  foldReplies: boolean;
   /** Turns in a row without a tool call after which the loop pauses; 0 never. */
   idleTurns: number;
   /** A result of a run longer than this, in characters, goes to a file and its start to the context; 0 never. */
@@ -63,6 +65,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     turnDelayMs: int(env.FIVE_TURN_DELAY_MS, 1000),
     contextWarn: Math.min(int(env.FIVE_CONTEXT_WARN, 60), 100) / 100,
     contextTrim: Math.min(int(env.FIVE_CONTEXT_TRIM, 85), 100) / 100,
+    foldReplies: flag(env.FIVE_FOLD_REPLIES ?? "on", "FIVE_FOLD_REPLIES"),
     idleTurns: int(env.FIVE_IDLE_TURNS, 3),
     resultChars: int(env.FIVE_RESULT_CHARS, 3000),
     autostart: flag(env.FIVE_AUTOSTART, "FIVE_AUTOSTART"),
