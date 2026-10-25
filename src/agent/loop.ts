@@ -6,18 +6,10 @@
 // prompt the agent set with set_next_prompt, or the same one. The context is
 // saved after every change, so a restart resumes it.
 //
-// Five keeps out of the context but for its guards: when the last call filled
-// most of the window, the turn's prompt starts with a warning, and when it
-// filled nearly all of it, five drops the oldest messages itself; and turns
-// that do no work, several in a row, pause the loop. A turn is folded into
-// the summary the agent ends it with, or into its last reply, and a long
-// result of a run is kept in a file, with only its start in the context.
-//
-// Every model call also ends with five's self block, after the messages: who
-// the agent is, how full its working memory is, what it has built, and its own
-// self note. Last, because it changes with every call: Ollama reuses its work
-// on the start of a prompt that did not change, and a block at the start would
-// make it read the whole context again on every call. The person's inbox replies are put before the next turn's prompt.
+// Everything else five does around a turn — its notes before the prompt,
+// folding and dropping turns, the idle pause, the self block, the limits on the
+// agent's tools — is the supervisor's (supervisor.ts), tunable while the loop
+// runs. The person's inbox replies are put before the next turn's prompt.
 
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -31,30 +23,14 @@ import type { ToolStore } from "../tools/store.ts";
 import { checkArgs, coerceArgs, parseArgs } from "./args.ts";
 import { awaitRun, type BuiltinContext, builtins, disabledError, formatRun, startGenerated } from "./builtins/index.ts";
 import { sleep } from "./builtins/shared.ts";
-import {
-  type ContextEnv,
-  contextTools,
-  contextToolsByName,
-  MEMORY_DIR,
-  SELF_NOTE,
-  SELF_NOTE_CHARS,
-} from "./context.ts";
+import { type ContextEnv, contextTools, contextToolsByName } from "./context.ts";
 import { SEED_PROMPT, seedSystemPrompt } from "./prompt.ts";
 import type { RunTable } from "./runs.ts";
+import { Supervisor, type SupervisorSettings } from "./supervisor.ts";
 
 /** Who calls tools, in run histories. */
 export const AGENT_ID = "five";
 
-/** A tool result longer than this is cut. */
-const MAX_RESULT_CHARS = 16_000;
-/** Tools that only read or end the turn: a turn that calls nothing else did no work. */
-const NO_WORK = new Set(["read_context", "memory_read", "set_next_prompt", "end_turn", "message_person"]);
-/** Where long results of runs are kept, in the workspace. */
-export const RESULTS_DIR = "results";
-/** The longest last reply a turn is folded into. */
-const MAX_REPLY_SUMMARY_CHARS = 1500;
-/** Share of the window a trim aims to leave the context at. */
-const TRIM_TO = 0.5;
 /** Waits after a failed turn, doubling up to the last. */
 const BACKOFF_MS = [5_000, 10_000, 30_000, 60_000];
 
@@ -69,34 +45,25 @@ export interface LoopOptions {
   contextTokens: number;
   maxSteps: number;
   turnDelayMs: number;
-  /** Share of the window above which a turn's prompt starts with a warning; 0 never. */
-  contextWarn?: number;
-  /** Share of the window above which five drops the oldest messages before a turn; 0 never. */
-  contextTrim?: number;
-  /** Fold a turn that ends with a reply into that reply, as end_turn would into its summary. */
-  foldReplies?: boolean;
-  /** Turns in a row without a tool call after which the loop pauses; 0 never. */
-  idleTurns?: number;
-  /** A result of a run longer than this goes to a file, its start to the context; 0 never. */
-  resultChars?: number;
+  /** The supervisor's settings, before any change made through the API. */
+  supervisor: SupervisorSettings;
   log?: Logger;
   onEvent?: (e: Event) => void;
 }
 
 export class Loop {
   readonly ctx: Context;
+  readonly supervisor: Supervisor;
   private readonly o: LoopOptions & { log: Logger };
   private running = false;
   private busy = false;
   private step = 0;
   private promptTokens: number | null = null;
   private failures = 0;
-  /** Turns in a row that did no work: no tool call beyond reading and ending the turn. */
-  private idle = 0;
   /** The prompt the current turn started with. */
   private turnPrompt = "";
-  /** Whether this turn sent the person a message already. */
-  private messaged = false;
+  /** Why the supervisor wants the loop paused after the turn that ended, if it does. */
+  private pauseFor?: string;
   private retryAt: number | null = null;
   private abort?: AbortController;
   /** Interrupts the wait between turns. */
@@ -110,6 +77,15 @@ export class Loop {
     if (!opts.state.loadContext()) opts.state.saveContext(this.ctx);
     // The last call's size outlives a restart, so the first turn after one is warned too.
     this.promptTokens = Number(opts.state.getMeta("prompt_tokens")) || null;
+    this.supervisor = new Supervisor({
+      state: opts.state,
+      store: opts.store,
+      workspace: opts.workspace,
+      contextTokens: opts.contextTokens,
+      defaults: opts.supervisor,
+      log: this.o.log.child({ component: "supervisor" }),
+      emit: (body) => this.emit(body),
+    });
   }
 
   status(): LoopStatus {
@@ -134,7 +110,7 @@ export class Loop {
     this.running = true;
     this.o.state.setMeta("running", "1");
     this.failures = 0;
-    this.idle = 0;
+    this.supervisor.started();
     this.emit({ type: "loop", state: "started" });
     this.o.log.info("loop started", { turn: this.ctx.turn });
     this.driving ??= this.drive().finally(() => {
@@ -166,39 +142,9 @@ export class Loop {
     return m;
   }
 
-  /** Five's self block: sent after the messages with every model call, never stored. */
+  /** Five's self block as the next model call sends it; empty when it is off. */
   selfBlock(): string {
-    const { ctx } = this;
-    const { contextTokens, state, store, workspace } = this.o;
-    const born = state.getMeta("born");
-    const goal = /^## Goal[ \t]*\n+([^\n]+)/m.exec(ctx.system)?.[1]?.trim();
-    const used = this.promptTokens;
-    const tools = store.list().map((t) => t.name);
-    let notes = 0;
-    let self = "";
-    try {
-      notes = fs.readdirSync(path.join(workspace, MEMORY_DIR)).filter((f) => f.endsWith(".md")).length;
-      self = fs.readFileSync(path.join(workspace, MEMORY_DIR, `${SELF_NOTE}.md`), "utf8").trim();
-    } catch {
-      // No memory yet, or no self note.
-    }
-    const inbox = state.inboxCounts();
-    return [
-      "## You, now",
-      "",
-      "Five writes this block for every model call, after your messages; it is not one of them, and not part of the prompt you edit.",
-      "",
-      `You are five. This is turn ${ctx.turn}${this.step ? `, step ${this.step}` : ""}${born ? `; you have run since ${born.slice(0, 16).replace("T", " ")} UTC` : ""}.`,
-      ...(goal ? [`Your goal: ${clip(goal, 240)}`] : []),
-      `Working memory — this context: ${used === null ? "not measured yet" : `${used.toLocaleString("en-US")} of ${contextTokens.toLocaleString("en-US")} tokens at the last call (${Math.round((100 * used) / contextTokens)}%)`}, ${ctx.messages.length} messages.`,
-      `Long-term memory: ${notes} note${notes === 1 ? "" : "s"} in ${MEMORY_DIR}/. Tools you built: ${tools.length ? clip(tools.join(", "), 300) : "none yet"}.`,
-      `Inbox: ${inbox.sent} message${inbox.sent === 1 ? "" : "s"} sent to the person${inbox.lastSentTurn === null ? "" : `, the last on turn ${inbox.lastSentTurn}`}; ${inbox.received} from them.`,
-      "",
-      `## Your self note (${MEMORY_DIR}/${SELF_NOTE}.md)`,
-      "",
-      self ||
-        `Not written yet. It is the one note sent with every call: who you are, what you care about, how you work best — in your own words, at most ${SELF_NOTE_CHARS} characters. memory_write with name "${SELF_NOTE}" writes it.`,
-    ].join("\n");
+    return this.supervisor.selfBlock(this.ctx, this.step, this.promptTokens) ?? "";
   }
 
   /** Run one turn while paused. */
@@ -229,6 +175,7 @@ export class Loop {
       ...(opts.next?.trim() && { next: opts.next }),
     });
     this.promptTokens = null;
+    this.supervisor.reset();
     this.o.state.setMeta("prompt_tokens", "");
     this.o.state.setMeta("born", "");
     this.o.state.clearEvents();
@@ -280,9 +227,8 @@ export class Loop {
     while (this.running) {
       const ok = await this.turn();
       if (!this.running) break;
-      const { idleTurns = 0 } = this.o;
-      if (idleTurns > 0 && this.idle >= idleTurns) {
-        this.pause(`${this.idle} turns in a row did no work`);
+      if (this.pauseFor) {
+        this.pause(this.pauseFor);
         break;
       }
       this.failures = ok ? 0 : this.failures + 1;
@@ -313,12 +259,12 @@ export class Loop {
     const started = performance.now();
     const prompt = ctx.next;
     if (!this.o.state.getMeta("born")) this.o.state.setMeta("born", new Date().toISOString());
-    const trimmed = this.trim();
-    const warning =
-      [this.idleWarning(), trimmed ?? this.contextWarning(), this.deliver(turn)].filter(Boolean).join("\n\n") ||
-      undefined;
+    const notes = this.supervisor.opening(ctx, this.promptTokens);
+    const delivered = this.deliver(turn);
+    if (delivered) notes.push(delivered);
+    const warning = notes.join("\n\n") || undefined;
     this.turnPrompt = prompt;
-    this.messaged = false;
+    this.pauseFor = undefined;
     const opening: Message = { role: "user", content: warning ? `${warning}\n\n${prompt}` : prompt };
     ctx.messages.push(opening);
     this.save();
@@ -334,11 +280,12 @@ export class Loop {
         const stepLog = log.child({ step });
         const tools = this.tools();
         const t0 = performance.now();
+        const self = this.supervisor.selfBlock(ctx, step, this.promptTokens);
         const completion = await this.o.model.complete({
           messages: [
             { role: "system", content: ctx.system },
             ...ctx.messages,
-            { role: "user", content: this.selfBlock() },
+            ...(self ? [{ role: "user" as const, content: self }] : []),
           ],
           tools,
           signal: this.abort.signal,
@@ -373,13 +320,11 @@ export class Loop {
         });
         if (!message.tool_calls?.length) {
           reason = "replied";
-          // A small model often forgets end_turn: its last reply stands in for the summary.
-          const reply = message.content?.trim();
-          if (reply && this.o.foldReplies) this.fold(opening, clip(reply, MAX_REPLY_SUMMARY_CHARS));
+          this.supervisor.endedWithReply(ctx, opening, message.content?.trim(), worked);
           break;
         }
 
-        if (message.tool_calls.some(isWork)) worked = true;
+        if (message.tool_calls.some((c) => this.supervisor.isWork(c))) worked = true;
         let end = false;
         let summary: string | undefined;
         for (const call of message.tool_calls) {
@@ -388,7 +333,7 @@ export class Loop {
             end = true;
             summary ??= s;
           });
-          const result = this.fit(raw, call);
+          const result = this.supervisor.fit(raw, call, turn, contextToolsByName.has(call.function.name));
           ctx.messages.push({ role: "tool", tool_call_id: call.id, name: call.function.name, content: result });
           this.save();
           this.emit({
@@ -404,7 +349,7 @@ export class Loop {
         }
         if (end) {
           reason = "end_turn";
-          if (summary) this.fold(opening, summary);
+          this.supervisor.endedWithSummary(ctx, opening, summary);
           break;
         }
       }
@@ -422,7 +367,7 @@ export class Loop {
       this.step = 0;
       this.busy = false;
       this.abort = undefined;
-      this.idle = worked || reason === "stopped" || reason === "error" ? 0 : this.idle + 1;
+      this.pauseFor = this.supervisor.ended({ worked, reason, prompt, next: ctx.next });
       this.save();
       this.emit({ type: "turn_ended", reason, next: ctx.next, ...(error && { error }) });
       log[reason === "error" ? "error" : "info"]("turn ended", {
@@ -436,62 +381,6 @@ export class Loop {
     }
   }
 
-  /**
-   * Replace the turn's messages, from its prompt on, with the agent's summary.
-   * When the agent deleted its prompt, the turn's messages stay.
-   */
-  private fold(opening: Message, summary: string): void {
-    const { messages, turn } = this.ctx;
-    const i = messages.indexOf(opening);
-    if (i < 0) return;
-    const n = messages.length - i;
-    messages.splice(i, n, { role: "assistant", content: `[Turn ${turn}, summarized] ${summary}` });
-    this.emit({ type: "context", by: "model", change: `turn ${turn}'s ${n} messages replaced by its summary` });
-    this.o.log.info("turn folded", { turn, messages: n });
-  }
-
-  /** A run's result, cut to fit the context: a long one is kept whole in a file the context points to. */
-  private fit(result: string, call: ToolCall): string {
-    const { resultChars = 0 } = this.o;
-    if (resultChars <= 0 || result.length <= resultChars || contextToolsByName.has(call.function.name)) {
-      return truncate(result);
-    }
-    const rel = path.join(RESULTS_DIR, `turn-${this.ctx.turn}-${call.id.replace(/[^\w-]/g, "_")}.txt`);
-    try {
-      fs.mkdirSync(path.join(this.o.workspace, RESULTS_DIR), { recursive: true });
-      fs.writeFileSync(path.join(this.o.workspace, rel), result);
-    } catch (err) {
-      this.o.log.warn("result not kept", { error: err instanceof Error ? err.message : String(err) });
-      return truncate(result);
-    }
-    return `${result.slice(0, resultChars)}\n… [${result.length - resultChars} more characters; the whole result is in ${rel}]`;
-  }
-
-  /**
-   * When the last call filled nearly all the window, drop the oldest messages
-   * until about half of it is left, and return the note that says so. A model
-   * with a full window can no longer make the call that frees it.
-   */
-  private trim(): string | undefined {
-    const { contextTrim = 0, contextTokens } = this.o;
-    const used = this.promptTokens;
-    const { messages } = this.ctx;
-    if (contextTrim <= 0 || used === null || used < contextTrim * contextTokens || !messages.length) return undefined;
-    const sizes = messages.map(chars);
-    const total = sizes.reduce((a, b) => a + b, 0);
-    // Characters stand in for tokens: drop the share of them that is over the aim.
-    const over = total * (1 - (TRIM_TO * contextTokens) / used);
-    let cut = 0;
-    for (let dropped = 0; cut < messages.length && dropped < over; cut++) dropped += sizes[cut] ?? 0;
-    // A tool result without the call before it is no message the model can read.
-    while (messages[cut]?.role === "tool") cut++;
-    messages.splice(0, cut);
-    this.emit({ type: "context", by: "five", change: `the ${cut} oldest messages dropped to free the window` });
-    this.o.log.warn("context trimmed", { messages: cut, prompt_tokens: used });
-    const share = Math.round((100 * used) / contextTokens);
-    return `[five] Your context was ${used.toLocaleString("en-US")} of ${contextTokens.toLocaleString("en-US")} tokens (${share}%), too full to work in, so five dropped your ${cut} oldest messages. What you saved with memory_write is still there: memory_read lists it. Keep the window small from now on: end every turn with end_turn(summary, next), and delete messages you no longer need.`;
-  }
-
   /** The person's messages not yet delivered, as the note this turn's prompt starts with. */
   private deliver(turn: number): string | undefined {
     const waiting = this.o.state.undelivered();
@@ -502,26 +391,6 @@ export class Loop {
     );
     const lines = waiting.map((m) => `[The person wrote to you, during turn ${m.turn}] ${m.text}`);
     return `${lines.join("\n\n")}\n\n[five] Take it into account as you see fit; message_person answers. Your work goes on either way.`;
-  }
-
-  /** The note a turn's prompt starts with after a turn that did no work. */
-  private idleWarning(): string | undefined {
-    if (this.idle === 0 || !this.o.idleTurns) return undefined;
-    return "[five] Your last turn did no work: it called nothing beyond reading, messaging and ending the turn, so it was wasted. What you do next is yours to decide: do the next piece of work now. If your goal is done, rewrite ## Goal in your system prompt with a new goal and start it. End the turn with end_turn(summary, next), where next says what to do — not what was done, and never to wait.";
-  }
-
-  /** The warning a turn's prompt starts with when the last call filled most of the window. */
-  private contextWarning(): string | undefined {
-    const { contextWarn = 0, contextTokens } = this.o;
-    const used = this.promptTokens;
-    if (contextWarn <= 0 || used === null || used < contextWarn * contextTokens) return undefined;
-    const share = Math.round((100 * used) / contextTokens);
-    const before = this.ctx.messages.length;
-    const drop =
-      before > 0
-        ? ` Messages 0–${before - 1} came before this turn: delete_messages with start 0 and end ${before - 1} drops them all, or pick the ones to drop with read_context.`
-        : "";
-    return `[five] Your context is ${used.toLocaleString("en-US")} of ${contextTokens.toLocaleString("en-US")} tokens (${share}%). When it is full the oldest text is silently lost and you can no longer work. Before anything else, save what you still need with memory_write, then delete messages you no longer need.${drop}`;
   }
 
   /** Every tool the agent can call now: its context tools, seven's built-ins, and the enabled tools it built. */
@@ -584,15 +453,6 @@ export class Loop {
     return result;
   }
 
-  private sendMessage(text: string): string {
-    if (this.messaged) return "error: you sent the person a message this turn already; one a turn. Keep working.";
-    this.messaged = true;
-    const m = this.o.state.addInbox(this.ctx.turn, "five", text);
-    this.emit({ type: "inbox", from: "five", text });
-    this.o.log.info("message sent", { id: m.id });
-    return "sent. The person reads the inbox now and then; a reply, if one comes, is put before the prompt of a later turn. Do not wait for it: go on with your work.";
-  }
-
   private contextEnv(endTurn: (summary?: string) => void): ContextEnv {
     return {
       ctx: this.ctx,
@@ -606,7 +466,9 @@ export class Loop {
       },
       endTurn,
       selfBlock: () => this.selfBlock(),
-      sendMessage: (text) => this.sendMessage(text),
+      sendMessage: (text) => this.supervisor.sendMessage(this.ctx.turn, text),
+      checkNext: (text) => this.supervisor.checkNext(text, this.turnPrompt),
+      checkSelfNote: (length) => this.supervisor.checkSelfNote(length),
     };
   }
 
@@ -635,35 +497,4 @@ export class Loop {
 
 function isFailure(result: string): boolean {
   return result.startsWith("error:") || result.startsWith("not saved:");
-}
-
-function truncate(s: string): string {
-  if (s.length <= MAX_RESULT_CHARS) return s;
-  return `${s.slice(0, MAX_RESULT_CHARS)}\n… [truncated ${s.length - MAX_RESULT_CHARS} of ${s.length} characters]`;
-}
-
-function clip(text: string, max: number): string {
-  return text.length <= max ? text : `${text.slice(0, max)} … [cut]`;
-}
-
-/** A message's length in characters: its text and its calls. */
-function chars(m: Message): number {
-  let n = m.content?.length ?? 0;
-  for (const c of (m.role === "assistant" && m.tool_calls) || [])
-    n += c.function.name.length + c.function.arguments.length;
-  return n;
-}
-
-/** Whether a call does work: anything but reading, messaging, ending the turn, or writing the self note. */
-function isWork(call: ToolCall): boolean {
-  const { name, arguments: args } = call.function;
-  if (NO_WORK.has(name)) return false;
-  if (name === "memory_write") {
-    try {
-      return String((JSON.parse(args) as { name?: unknown }).name).replace(/\.md$/, "") !== SELF_NOTE;
-    } catch {
-      return true;
-    }
-  }
-  return true;
 }

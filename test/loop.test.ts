@@ -16,6 +16,7 @@ import type {
   ProcessDetail,
   ProcessInfo,
   Status,
+  SupervisorView,
   WorkspaceDir,
   WorkspaceEntry,
 } from "../src/api/types.ts";
@@ -27,7 +28,8 @@ type Reply = { content?: string; calls?: [string, Record<string, unknown>][]; to
 
 /**
  * A model that gives the scripted replies in order, and records every request:
- * its messages without five's self block, which ends each one, and the block.
+ * its messages without five's self block, which ends each one, and the block
+ * ("" when it is off).
  */
 function scripted(replies: Reply[]): ChatModel & { requests: Message[][]; selves: string[] } {
   const requests: Message[][] = [];
@@ -38,9 +40,8 @@ function scripted(replies: Reply[]): ChatModel & { requests: Message[][]; selves
     selves,
     async complete(req: CompletionRequest): Promise<Completion> {
       const messages = structuredClone(req.messages);
-      const self = messages.pop();
-      assert.equal(self?.role, "user");
-      assert.match(self?.content ?? "", /^## You, now/);
+      const last = messages.at(-1);
+      const self = last?.role === "user" && last.content.startsWith("## You, now") ? messages.pop() : undefined;
       selves.push(self?.content ?? "");
       requests.push(messages);
       const r = replies[n++] ?? { content: "done" };
@@ -599,12 +600,14 @@ test("a nearly full context has its oldest messages dropped before the turn", as
   assert.ok(change);
 });
 
-test("a turn that ends with a reply is folded into it", async () => {
+test("a turn that ends with a reply is folded into it if it did work, and leaves nothing if not", async () => {
   const { five } = make(
     [
-      { calls: [["read_context", {}]] },
-      { content: "Read my context and found it empty." },
+      { calls: [["memory_write", { name: "plan", text: "Map the coast." }]] },
+      { content: "Saved my plan." },
       { calls: [["end_turn", { summary: "Ended.", next: "Go on." }]] },
+      { calls: [["read_context", {}]] },
+      { content: "I will map the coast next." },
       { content: "  " },
     ],
     { FIVE_FOLD_REPLIES: "on" },
@@ -612,17 +615,39 @@ test("a turn that ends with a reply is folded into it", async () => {
   await turn(five);
   assert.deepEqual(
     five.loop.ctx.messages.map((m) => m.content),
-    ["[Turn 1, summarized] Read my context and found it empty."],
+    ["[Turn 1, summarized] Saved my plan."],
   );
+  // end_turn's summary wins, even after no work.
+  await turn(five);
+  assert.equal(five.loop.ctx.messages[1]?.content, "[Turn 2, summarized] Ended.");
+  // Reading and replying is no work: the turn is dropped, as is one with an empty reply.
   await turn(five);
   await turn(five);
-  // end_turn's summary wins; an empty reply leaves the turn as it is.
-  const msgs = five.loop.ctx.messages;
-  assert.equal(msgs[1]?.content, "[Turn 2, summarized] Ended.");
   assert.deepEqual(
-    msgs.slice(2).map((m) => m.role),
-    ["user", "assistant"],
+    five.loop.ctx.messages.map((m) => m.content),
+    ["[Turn 1, summarized] Saved my plan.", "[Turn 2, summarized] Ended."],
   );
+  const dropped = five.state.eventsAfter(0, 100).filter((e) => e.type === "context" && e.by === "five");
+  assert.equal(dropped.length, 2);
+});
+
+test("a next prompt unchanged for three turns gets a note", async () => {
+  const work: Reply = { calls: [["memory_write", { name: "n", text: "x" }]] };
+  const { five, model } = make([
+    work,
+    { content: "a" },
+    work,
+    { content: "b" },
+    work,
+    { content: "c" },
+    { content: "d" },
+  ]);
+  await turn(five);
+  await turn(five);
+  await turn(five);
+  assert.doesNotMatch(model.requests[4]?.at(-1)?.content as string, /has not changed/);
+  await turn(five);
+  assert.match(model.requests[6]?.at(-1)?.content as string, /^\[five\] Your next prompt has not changed for 3 turns/);
 });
 
 test("every call ends with five's self block, with the self note; the system prompt stays as it is", async () => {
@@ -699,4 +724,58 @@ test("the inbox: one message a turn to the person, and their reply put before th
   } finally {
     server.close();
   }
+});
+
+test("the supervisor's settings change live through the API, outlive a restart, and reset", async () => {
+  const send = (text: string): [string, Record<string, unknown>] => ["message_person", { text }];
+  const { five, cfg, model } = make([{ calls: [send("One."), send("Two."), send("Three.")] }, { content: "a" }]);
+  const server = createApi({ five, cfg, log: (await import("../src/log.ts")).noopLogger });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}/api/v1`;
+  const put = (body: unknown) =>
+    fetch(`${base}/supervisor`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  try {
+    let view = (await (await fetch(`${base}/supervisor`)).json()) as SupervisorView;
+    assert.equal(view.settings.messagesPerTurn, 1);
+    assert.deepEqual(view.changed, []);
+    assert.ok(view.fields.some((f) => f.key === "contextTrim"));
+
+    assert.equal((await put({ nope: 1 })).status, 400);
+    assert.equal((await put({ messagesPerTurn: 1.5 })).status, 400);
+    assert.equal((await put({ selfBlock: "no" })).status, 400);
+    // A refused change changes nothing, even its valid parts.
+    assert.equal((await put({ messagesPerTurn: 2, contextTrim: 101 })).status, 400);
+    view = (await (await put({ messagesPerTurn: 2, selfBlock: false })).json()) as SupervisorView;
+    assert.deepEqual(view.changed.sort(), ["messagesPerTurn", "selfBlock"]);
+
+    await turn(five);
+    // No self block, and two messages a turn.
+    assert.equal(model.requests[0]?.at(-1)?.content, SEED_PROMPT);
+    const results = model.requests[1]?.filter((m) => m.role === "tool").map((m) => m.content) ?? [];
+    assert.deepEqual(
+      results.map((r) => r?.slice(0, 5)),
+      ["sent.", "sent.", "error"],
+    );
+    const changes = five.state.eventsAfter(0, 100).filter((e) => e.type === "supervisor");
+    assert.equal(changes.length, 1);
+    assert.match(
+      changes[0]?.type === "supervisor" ? changes[0].change : "",
+      /messagesPerTurn 1 → 2, selfBlock true → false/,
+    );
+  } finally {
+    server.close();
+  }
+
+  await five.close();
+  open.splice(open.indexOf(five), 1);
+  const again = createFive(cfg, scripted([]));
+  open.push(again);
+  assert.equal(again.loop.supervisor.settings.messagesPerTurn, 2);
+  again.loop.supervisor.resetSettings();
+  assert.deepEqual(again.loop.supervisor.view().changed, []);
+  assert.equal(again.loop.supervisor.settings.selfBlock, true);
 });
