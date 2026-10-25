@@ -50,9 +50,19 @@
   gap: var(--space-2);
 }
 
-.stop {
-  background: var(--danger);
-  color: var(--accent-text);
+.action {
+  min-height: 36px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.action:hover {
+  background: var(--surface-2);
 }
 
 .window {

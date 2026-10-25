@@ -104,23 +104,23 @@ function Controls() {
       <div class={styles.actions}>
         {loop.retryAt && <Badge state="warn">retry at {clock(loop.retryAt)}</Badge>}
         {loop.running ? (
-          <button type="button" class="button" onClick={() => void act('pause')} title="Stop looping once this turn ends">
+          <button type="button" class={styles.action} onClick={() => void act('pause')} title="Stop looping once this turn ends">
             Pause
           </button>
         ) : (
-          <button type="button" class="button" onClick={() => void act('start')}>
+          <button type="button" class={styles.action} onClick={() => void act('start')}>
             Start
           </button>
         )}
         {!loop.running && !loop.busy && (
-          <button type="button" class="button" onClick={() => void act('step')} title="Run one turn">
+          <button type="button" class={styles.action} onClick={() => void act('step')} title="Run one turn">
             Step
           </button>
         )}
         {loop.busy && (
           <button
             type="button"
-            class={`button ${styles.stop}`}
+            class={styles.action}
             onClick={() => void act('stop')}
             title="Pause, and end this turn now"
           >
