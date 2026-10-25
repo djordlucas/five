@@ -13,9 +13,11 @@
 // the summary the agent ends it with, or into its last reply, and a long
 // result of a run is kept in a file, with only its start in the context.
 //
-// Every model call also sends five's self block after the system prompt: who
+// Every model call also ends with five's self block, after the messages: who
 // the agent is, how full its working memory is, what it has built, and its own
-// self note. The person's inbox replies are put before the next turn's prompt.
+// self note. Last, because it changes with every call: Ollama reuses its work
+// on the start of a prompt that did not change, and a block at the start would
+// make it read the whole context again on every call. The person's inbox replies are put before the next turn's prompt.
 
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -164,7 +166,7 @@ export class Loop {
     return m;
   }
 
-  /** Five's self block: sent after the system prompt with every model call. */
+  /** Five's self block: sent after the messages with every model call, never stored. */
   selfBlock(): string {
     const { ctx } = this;
     const { contextTokens, state, store, workspace } = this.o;
@@ -184,7 +186,7 @@ export class Loop {
     return [
       "## You, now",
       "",
-      "Five writes this block for every model call, after your system prompt; it is not part of the prompt you edit.",
+      "Five writes this block for every model call, after your messages; it is not one of them, and not part of the prompt you edit.",
       "",
       `You are five. This is turn ${ctx.turn}${this.step ? `, step ${this.step}` : ""}${born ? `; you have run since ${born.slice(0, 16).replace("T", " ")} UTC` : ""}.`,
       ...(goal ? [`Your goal: ${clip(goal, 240)}`] : []),
@@ -333,7 +335,11 @@ export class Loop {
         const tools = this.tools();
         const t0 = performance.now();
         const completion = await this.o.model.complete({
-          messages: [{ role: "system", content: `${ctx.system}\n\n${this.selfBlock()}` }, ...ctx.messages],
+          messages: [
+            { role: "system", content: ctx.system },
+            ...ctx.messages,
+            { role: "user", content: this.selfBlock() },
+          ],
           tools,
           signal: this.abort.signal,
           log: stepLog,

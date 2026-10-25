@@ -69,7 +69,7 @@ export const contextTools: ContextTool[] = [
       const lines = [
         `Tokens used by the last model call: ${used}. When the window is full, the oldest text is silently lost.`,
         `Turn ${ctx.turn}. Next prompt: ${JSON.stringify(ctx.next)}`,
-        `System prompt: ${ctx.system.length} characters, then five's self block: ${env.selfBlock().length} characters.`,
+        `System prompt: ${ctx.system.length} characters. Five's self block, after your messages: ${env.selfBlock().length} characters.`,
         ctx.messages.length === 0
           ? "Messages: none."
           : `Messages: ${ctx.messages.length} (indices 0–${last}); showing ${start}–${end}.`,

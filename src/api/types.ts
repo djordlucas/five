@@ -102,7 +102,7 @@ export interface InboxPage {
 
 export interface ContextView {
   system: string;
-  /** Five's self block, rebuilt for every model call and sent after the system prompt. */
+  /** Five's self block, rebuilt for every model call and sent after the messages. */
   self: string;
   next: string;
   turn: number;

@@ -25,14 +25,24 @@ import type { ChatModel, Completion, CompletionRequest, Message } from "../src/l
 
 type Reply = { content?: string; calls?: [string, Record<string, unknown>][]; tokens?: number };
 
-/** A model that gives the scripted replies in order, and records every request. */
-function scripted(replies: Reply[]): ChatModel & { requests: Message[][] } {
+/**
+ * A model that gives the scripted replies in order, and records every request:
+ * its messages without five's self block, which ends each one, and the block.
+ */
+function scripted(replies: Reply[]): ChatModel & { requests: Message[][]; selves: string[] } {
   const requests: Message[][] = [];
+  const selves: string[] = [];
   let n = 0;
   return {
     requests,
+    selves,
     async complete(req: CompletionRequest): Promise<Completion> {
-      requests.push(structuredClone(req.messages));
+      const messages = structuredClone(req.messages);
+      const self = messages.pop();
+      assert.equal(self?.role, "user");
+      assert.match(self?.content ?? "", /^## You, now/);
+      selves.push(self?.content ?? "");
+      requests.push(messages);
       const r = replies[n++] ?? { content: "done" };
       return {
         message: {
@@ -116,8 +126,8 @@ test("the agent rewrites its system prompt, its messages and its next prompt", a
   ]);
   await turn(five);
   // The system prompt changed from the call after the one that changed it.
-  assert.doesNotMatch(model.requests[0]?.[0]?.content ?? "", /^You are a counter\./);
-  assert.match(model.requests[1]?.[0]?.content ?? "", /^You are a counter\.\n\n## You, now/);
+  assert.notEqual(model.requests[0]?.[0]?.content, "You are a counter.");
+  assert.equal(model.requests[1]?.[0]?.content, "You are a counter.");
   // Deleting messages 0–2 (the prompt, the first call, its first result) left
   // the second result, the delete call and its result.
   assert.deepEqual(
@@ -615,7 +625,7 @@ test("a turn that ends with a reply is folded into it", async () => {
   );
 });
 
-test("every call sends five's self block after the system prompt, with the self note", async () => {
+test("every call ends with five's self block, with the self note; the system prompt stays as it is", async () => {
   const self: [string, Record<string, unknown>][] = [["memory_write", { name: "self", text: "I am curious." }]];
   const { five, model } = make(
     [
@@ -627,12 +637,11 @@ test("every call sends five's self block after the system prompt, with the self 
     { FIVE_CONTEXT_TOKENS: "1000", FIVE_IDLE_TURNS: "3" },
   );
   await turn(five);
-  const first = model.requests[0]?.[0]?.content as string;
-  assert.equal(model.requests[0]?.[0]?.role, "system");
-  assert.ok(first.startsWith(five.loop.ctx.system));
-  assert.match(first, /## You, now[\s\S]*You are five\. This is turn 1, step 1/);
+  assert.deepEqual(model.requests[0]?.[0], { role: "system", content: five.loop.ctx.system });
+  const first = model.selves[0] ?? "";
+  assert.match(first, /You are five\. This is turn 1, step 1/);
   assert.match(first, /Not written yet/);
-  const second = model.requests[1]?.[0]?.content as string;
+  const second = model.selves[1] ?? "";
   assert.match(second, /this context: 400 of 1,000 tokens at the last call \(40%\)/);
   assert.match(second, /## Your self note \(memory\/self\.md\)\n\nI am curious\./);
   const tool = model.requests[2]?.at(-1)?.content as string;
