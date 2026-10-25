@@ -15,8 +15,20 @@ import * as path from "node:path";
 import type { Five } from "../app.ts";
 import type { Config } from "../config.ts";
 import type { Logger } from "../log.ts";
-import type { ContextView, ErrorBody, EventsPage, Status, ToolDetail, ToolInfo } from "./types.ts";
+import type {
+  ContextView,
+  ErrorBody,
+  EventsPage,
+  InboxMessage,
+  InboxPage,
+  Status,
+  ToolDetail,
+  ToolInfo,
+} from "./types.ts";
 import { MAX_FILE_BYTES, Workspace, WorkspaceError } from "./workspace.ts";
+
+/** The longest message the person can send: it goes into a turn's prompt. */
+const MAX_MESSAGE_CHARS = 4000;
 
 const MAX_BODY = 1024 * 1024;
 /** Events in one page. */
@@ -97,7 +109,7 @@ export function createApi(opts: ApiOptions): http.Server {
   };
   const contextView = (): ContextView => {
     const { system, next, turn, messages } = loop.ctx;
-    return { system, next, turn, messages };
+    return { system, self: loop.selfBlock(), next, turn, messages };
   };
 
   route(
@@ -114,6 +126,7 @@ export function createApi(opts: ApiOptions): http.Server {
       messages: loop.ctx.messages.length,
       tools: store.list().length,
       lastSeq: state.lastSeq(),
+      inboxLast: state.lastFromFive(),
     }),
   );
 
@@ -175,6 +188,14 @@ export function createApi(opts: ApiOptions): http.Server {
       }),
     ),
   );
+
+  // ── the inbox ───────────────────────────────────────────────────────────
+  route("GET", "/api/v1/inbox", (): InboxPage => ({ messages: state.listInbox() }));
+  route("POST", "/api/v1/inbox", ({ body }): InboxMessage => {
+    const t = text(body, "text").trim();
+    if (t.length > MAX_MESSAGE_CHARS) throw new HttpError(400, `a message is at most ${MAX_MESSAGE_CHARS} characters`);
+    return loop.receive(t);
+  });
 
   // ── events ──────────────────────────────────────────────────────────────
   route("GET", "/api/v1/events", ({ query }): EventsPage => {

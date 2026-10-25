@@ -16,6 +16,27 @@ export const status = signal<Status | null>(null);
 export const events = signal<Event[]>([]);
 /** Whether the last poll reached five. */
 export const online = signal<'connecting' | 'live' | 'offline'>('connecting');
+/** The id of five's latest message this browser has seen on the Inbox page. */
+export const inboxSeen = signal(readSeen());
+
+function readSeen(): number {
+  try {
+    return Number(localStorage.getItem('five.inboxSeen')) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+export function markInboxSeen(id: number): void {
+  if (id <= inboxSeen.value) return;
+  inboxSeen.value = id;
+  try {
+    localStorage.setItem('five.inboxSeen', String(id));
+  } catch {
+    // Not kept: the dot comes back on the next load.
+  }
+}
+
 /** How many turns back the timeline was loaded. */
 export const turnsLoaded = signal(20);
 

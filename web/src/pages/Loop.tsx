@@ -11,7 +11,7 @@ type Of<T extends Event['type']> = Extract<Event, { type: T }>;
 interface Turn {
   turn: number;
   started?: Of<'turn_started'>;
-  items: (Of<'model'> | Of<'context'> | Of<'loop'>)[];
+  items: (Of<'model'> | Of<'context'> | Of<'loop'> | Of<'inbox'>)[];
   ended?: Of<'turn_ended'>;
   /** Tool results by call id. */
   results: Map<string, Of<'tool'>>;
@@ -159,6 +159,13 @@ function TurnView({ t }: { t: Turn }) {
             return (
               <p key={e.seq} class={styles.line}>
                 ✎ {e.by === 'user' ? 'you' : e.by === 'five' ? 'five' : 'the agent'}: {e.change}
+              </p>
+            );
+          case 'inbox':
+            return (
+              <p key={e.seq} class={`${styles.line} ${styles.inbox}`}>
+                ✉ {e.from === 'five' ? 'to you' : 'you wrote'}: {oneLine(e.text, 240)} ·{' '}
+                <a href="/inbox">inbox</a>
               </p>
             );
           case 'loop':

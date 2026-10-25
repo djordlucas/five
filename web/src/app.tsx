@@ -3,6 +3,7 @@ import { LocationProvider, Route, Router } from 'preact-iso';
 import { Shell } from './components/Shell';
 import { startPolling, stopPolling } from './live';
 import { Context } from './pages/Context';
+import { Inbox } from './pages/Inbox';
 import { Loop } from './pages/Loop';
 import { NotFound } from './pages/NotFound';
 import { Processes } from './pages/Processes';
@@ -21,6 +22,7 @@ export function App() {
         <Router>
           <Route path="/" component={Loop} />
           <Route path="/context" component={Context} />
+          <Route path="/inbox" component={Inbox} />
           <Route path="/tools/:name" component={Tools} />
           <Route path="/tools" component={Tools} />
           <Route path="/workspace" component={Workspace} />

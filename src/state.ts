@@ -1,14 +1,14 @@
 // Five's own state, in one SQLite file: <workspace>/.five/five.db.
 //
 // The context (system prompt, messages, next prompt), the event log the web UI
-// follows, generated tools and their run history, and background runs all
+// follows, the inbox between five and the person, generated tools and their run history, and background runs all
 // live here, so a restart resumes where the last process stopped. The tool and
 // run tables are seven's.
 
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
-import type { Event, EventBody } from "./api/types.ts";
+import type { Event, EventBody, InboxMessage } from "./api/types.ts";
 import type { Message } from "./llm/model.ts";
 
 export type { Event, EventBody, TurnEnd } from "./api/types.ts";
@@ -84,6 +84,14 @@ CREATE TABLE IF NOT EXISTS runs (
   duration_ms INTEGER,
   started_at TEXT NOT NULL,
   checked INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS inbox (
+  id INTEGER PRIMARY KEY,
+  at TEXT NOT NULL,
+  turn INTEGER NOT NULL,
+  sender TEXT NOT NULL CHECK (sender IN ('five', 'person')),
+  text TEXT NOT NULL,
+  delivered_turn INTEGER
 );
 INSERT OR IGNORE INTO meta (key, value) VALUES ('run_seq', '0');
 `;
@@ -175,6 +183,61 @@ export class State {
     this.db.exec("DELETE FROM events");
   }
 
+  // ── inbox ─────────────────────────────────────────────────────────────────
+
+  addInbox(turn: number, from: InboxMessage["from"], text: string): InboxMessage {
+    const at = now();
+    const r = this.db
+      .prepare("INSERT INTO inbox (at, turn, sender, text) VALUES (?, ?, ?, ?)")
+      .run(at, turn, from, text);
+    return { id: Number(r.lastInsertRowid), at, turn, from, text };
+  }
+
+  /** Newest first. */
+  listInbox(limit = 200): InboxMessage[] {
+    return this.db.prepare("SELECT * FROM inbox ORDER BY id DESC LIMIT ?").all(limit).map(toInbox);
+  }
+
+  /** The person's messages not yet put before a turn, oldest first. */
+  undelivered(): InboxMessage[] {
+    return this.db
+      .prepare("SELECT * FROM inbox WHERE sender = 'person' AND delivered_turn IS NULL ORDER BY id")
+      .all()
+      .map(toInbox);
+  }
+
+  markDelivered(ids: number[], turn: number): void {
+    const stmt = this.db.prepare("UPDATE inbox SET delivered_turn = ? WHERE id = ?");
+    for (const id of ids) stmt.run(turn, id);
+  }
+
+  /** How many messages five sent and on which turn the last, and how many the person sent. */
+  inboxCounts(): { sent: number; lastSentTurn: number | null; received: number } {
+    const row = this.db
+      .prepare(
+        "SELECT COUNT(*) FILTER (WHERE sender = 'five') AS sent, MAX(turn) FILTER (WHERE sender = 'five') AS last, " +
+          "COUNT(*) FILTER (WHERE sender = 'person') AS received FROM inbox",
+      )
+      .get() as { sent: number; last: number | null; received: number };
+    return {
+      sent: Number(row.sent),
+      lastSentTurn: row.last === null ? null : Number(row.last),
+      received: Number(row.received),
+    };
+  }
+
+  /** The id of five's latest message; 0 when none. */
+  lastFromFive(): number {
+    const row = this.db.prepare("SELECT COALESCE(MAX(id), 0) AS id FROM inbox WHERE sender = 'five'").get() as {
+      id: number;
+    };
+    return Number(row.id);
+  }
+
+  clearInbox(): void {
+    this.db.exec("DELETE FROM inbox");
+  }
+
   // ── background runs (seven's) ─────────────────────────────────────────────
 
   insertRun(agent: string, tool: string): string {
@@ -235,6 +298,18 @@ type Row = Record<string, SQLInputValue>;
 function toEvent(r: unknown): Event {
   const x = r as Row;
   return { ...(JSON.parse(String(x.body)) as EventBody), seq: Number(x.seq), at: String(x.at), turn: Number(x.turn) };
+}
+
+function toInbox(r: unknown): InboxMessage {
+  const x = r as Row;
+  return {
+    id: Number(x.id),
+    at: String(x.at),
+    turn: Number(x.turn),
+    from: x.sender as InboxMessage["from"],
+    text: String(x.text),
+    ...(x.delivered_turn !== null && { deliveredTurn: Number(x.delivered_turn) }),
+  };
 }
 
 function toRun(r: unknown): RunRow {

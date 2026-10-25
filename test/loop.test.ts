@@ -11,6 +11,8 @@ import type {
   DbRows,
   DbTable,
   EventsPage,
+  InboxMessage,
+  InboxPage,
   ProcessDetail,
   ProcessInfo,
   Status,
@@ -114,8 +116,8 @@ test("the agent rewrites its system prompt, its messages and its next prompt", a
   ]);
   await turn(five);
   // The system prompt changed from the call after the one that changed it.
-  assert.notEqual(model.requests[0]?.[0]?.content, "You are a counter.");
-  assert.equal(model.requests[1]?.[0]?.content, "You are a counter.");
+  assert.doesNotMatch(model.requests[0]?.[0]?.content ?? "", /^You are a counter\./);
+  assert.match(model.requests[1]?.[0]?.content ?? "", /^You are a counter\.\n\n## You, now/);
   // Deleting messages 0–2 (the prompt, the first call, its first result) left
   // the second result, the delete call and its result.
   assert.deepEqual(
@@ -611,4 +613,81 @@ test("a turn that ends with a reply is folded into it", async () => {
     msgs.slice(2).map((m) => m.role),
     ["user", "assistant"],
   );
+});
+
+test("every call sends five's self block after the system prompt, with the self note", async () => {
+  const self: [string, Record<string, unknown>][] = [["memory_write", { name: "self", text: "I am curious." }]];
+  const { five, model } = make(
+    [
+      { calls: self, tokens: 400 },
+      { calls: [["memory_write", { name: "self", text: "x".repeat(1501) }]] },
+      { content: "a" },
+      { content: "b" },
+    ],
+    { FIVE_CONTEXT_TOKENS: "1000", FIVE_IDLE_TURNS: "3" },
+  );
+  await turn(five);
+  const first = model.requests[0]?.[0]?.content as string;
+  assert.equal(model.requests[0]?.[0]?.role, "system");
+  assert.ok(first.startsWith(five.loop.ctx.system));
+  assert.match(first, /## You, now[\s\S]*You are five\. This is turn 1, step 1/);
+  assert.match(first, /Not written yet/);
+  const second = model.requests[1]?.[0]?.content as string;
+  assert.match(second, /this context: 400 of 1,000 tokens at the last call \(40%\)/);
+  assert.match(second, /## Your self note \(memory\/self\.md\)\n\nI am curious\./);
+  const tool = model.requests[2]?.at(-1)?.content as string;
+  assert.match(tool, /kept to 1500 characters/);
+  // Writing only the self note is no work.
+  await turn(five);
+  assert.match(model.requests[3]?.at(-1)?.content as string, /^\[five\] Your last turn did no work/);
+});
+
+test("the inbox: one message a turn to the person, and their reply put before the next prompt", async () => {
+  const send = (text: string): [string, Record<string, unknown>] => ["message_person", { text }];
+  const { five, cfg, model } = make([
+    { calls: [send("Found a map."), send("And another.")] },
+    { content: "a" },
+    { content: "b" },
+  ]);
+  const server = createApi({ five, cfg, log: (await import("../src/log.ts")).noopLogger });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}/api/v1`;
+  const json = { "content-type": "application/json" };
+  try {
+    await turn(five);
+    const results = model.requests[1]?.filter((m) => m.role === "tool").map((m) => m.content) ?? [];
+    assert.match(results[0] ?? "", /^sent\./);
+    assert.match(results[1] ?? "", /one a turn/);
+    const status = (await (await fetch(`${base}/status`)).json()) as Status;
+    let page = (await (await fetch(`${base}/inbox`)).json()) as InboxPage;
+    assert.deepEqual(
+      page.messages.map((m) => [m.from, m.text, m.turn]),
+      [["five", "Found a map.", 1]],
+    );
+    assert.equal(status.inboxLast, page.messages[0]?.id);
+
+    const empty = await fetch(`${base}/inbox`, { method: "POST", headers: json, body: '{"text":" "}' });
+    assert.equal(empty.status, 400);
+    const sent = await fetch(`${base}/inbox`, { method: "POST", headers: json, body: '{"text":"Which map?"}' });
+    assert.equal(((await sent.json()) as InboxMessage).from, "person");
+
+    await turn(five);
+    const prompt = model.requests[2]?.at(-1)?.content as string;
+    assert.match(prompt, /^\[The person wrote to you, during turn 1\] Which map\?/);
+    assert.ok(prompt.endsWith(SEED_PROMPT));
+    page = (await (await fetch(`${base}/inbox`)).json()) as InboxPage;
+    assert.equal(page.messages[0]?.deliveredTurn, 2);
+    // Delivered once only.
+    await turn(five);
+    assert.equal(model.requests[3]?.at(-1)?.content, SEED_PROMPT);
+    assert.deepEqual(
+      five.state
+        .eventsAfter(0, 100)
+        .filter((e) => e.type === "inbox")
+        .map((e) => e.type === "inbox" && e.from),
+      ["five", "person"],
+    );
+  } finally {
+    server.close();
+  }
 });
