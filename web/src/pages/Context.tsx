@@ -62,7 +62,7 @@ export function Context() {
       <section class={`card ${styles.field}`}>
         <div class={styles.fieldHead}>
           <h2>Self block</h2>
-          <span class="muted">Written by five for every call, after the system prompt; read-only.</span>
+          <span class="muted">Written by five for every call, after the messages; read-only.</span>
         </div>
         <textarea class={styles.text} rows={10} value={ctx.self} readOnly aria-label="Self block" />
       </section>
