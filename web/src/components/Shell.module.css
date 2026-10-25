@@ -50,6 +50,14 @@
   font-weight: 600;
 }
 
+.unread {
+  width: 8px;
+  height: 8px;
+  margin-left: auto;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
 .railFoot {
   display: flex;
   flex-direction: column;
@@ -146,7 +154,8 @@
 
   .tabs {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(0, 1fr);
     min-height: var(--tabbar);
     padding-bottom: env(safe-area-inset-bottom);
     background: var(--surface);
@@ -163,9 +172,23 @@
     border: none;
     background: none;
     color: var(--text-2);
-    font-size: 11px;
+    position: relative;
+    font-size: 10.5px;
     text-decoration: none;
     cursor: pointer;
+  }
+
+  .tab span {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .tab .unread {
+    position: absolute;
+    top: 8px;
+    left: calc(50% + 8px);
+    margin: 0;
   }
 
   .tab[aria-current='page'] {

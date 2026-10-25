@@ -2,7 +2,9 @@
 // the system prompt, every message, and the prompt that starts its next turn.
 // A change applies from the next model call; nothing else keeps a copy, so
 // what the agent deletes is gone — but for its memory: notes it saves as files
-// in <workspace>/memory, to read back in any later turn.
+// in <workspace>/memory, to read back in any later turn. One note, self, is
+// sent with every call in five's self block. message_person writes to the
+// inbox the person reads; it never waits for an answer.
 
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -26,6 +28,10 @@ export interface ContextEnv {
   changed(change: string): void;
   /** Ends the turn once this step's calls are done; with a summary, it replaces the turn's messages. */
   endTurn(summary?: string): void;
+  /** Five's self block, as the next model call will send it. */
+  selfBlock(): string;
+  /** Puts a message in the person's inbox; an error when one was sent this turn already. */
+  sendMessage(text: string): string;
 }
 
 /** Characters of each message read_context shows unless asked for full text. */
@@ -33,21 +39,25 @@ const PREVIEW_CHARS = 200;
 /** The memory directory, in the workspace. */
 export const MEMORY_DIR = "memory";
 const NOTE_NAME = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+/** The note five's self block sends with every call. */
+export const SELF_NOTE = "self";
+/** The longest the self note may be. */
+export const SELF_NOTE_CHARS = 1500;
 
 export const contextTools: ContextTool[] = [
   {
     name: "read_context",
     description:
-      "Show your context: token use, the next prompt, the system prompt's size, and your messages with their " +
-      "indices, which edit_message, insert_message and delete_messages take. Indices shift after an insert or " +
-      "delete, so read again before the next edit.",
+      "Show your context — your working memory: token use, the next prompt, the system prompt's size, and your " +
+      "messages with their indices, which edit_message, insert_message and delete_messages take. Indices shift " +
+      "after an insert or delete, so read again before the next edit.",
     parameters: {
       type: "object",
       properties: {
         start: { type: "integer", description: "First message index to show. Default 0." },
         end: { type: "integer", description: "Last message index to show, inclusive. Default the last." },
         full: { type: "boolean", description: `Show whole messages, not the first ${PREVIEW_CHARS} characters.` },
-        system: { type: "boolean", description: "Also show the system prompt in full." },
+        system: { type: "boolean", description: "Also show the system prompt and five's self block in full." },
       },
     },
     run(a, env) {
@@ -59,12 +69,14 @@ export const contextTools: ContextTool[] = [
       const lines = [
         `Tokens used by the last model call: ${used}. When the window is full, the oldest text is silently lost.`,
         `Turn ${ctx.turn}. Next prompt: ${JSON.stringify(ctx.next)}`,
-        `System prompt: ${ctx.system.length} characters.`,
+        `System prompt: ${ctx.system.length} characters, then five's self block: ${env.selfBlock().length} characters.`,
         ctx.messages.length === 0
           ? "Messages: none."
           : `Messages: ${ctx.messages.length} (indices 0–${last}); showing ${start}–${end}.`,
       ];
-      if (a.system === true) lines.push("", "=== system prompt ===", ctx.system);
+      if (a.system === true) {
+        lines.push("", "=== system prompt ===", ctx.system, "", "=== five's self block ===", env.selfBlock());
+      }
       for (let i = start; i <= end && i <= last; i++) {
         const m = ctx.messages[i] as Message;
         lines.push("", `=== [${i}] ${label(m)} ===`, a.full === true ? (m.content ?? "") : clip(m.content ?? ""));
@@ -214,6 +226,12 @@ export const contextTools: ContextTool[] = [
       if (!NOTE_NAME.test(name)) return `error: "${name}" is not a note name: use lowercase letters, digits, - and _`;
       const file = notePath(env, name);
       const text = String(a.text);
+      if (name === SELF_NOTE) {
+        const before = a.append === true && fs.existsSync(file) ? fs.readFileSync(file, "utf8").length : 0;
+        if (before + text.length > SELF_NOTE_CHARS) {
+          return `error: the ${SELF_NOTE} note is sent with every call, so it is kept to ${SELF_NOTE_CHARS} characters; this would make it ${before + text.length}. Rewrite it shorter.`;
+        }
+      }
       if (!text.trim() && a.append !== true) {
         if (!fs.existsSync(file)) return `error: there is no note "${name}"`;
         fs.rmSync(file);
@@ -263,11 +281,27 @@ export const contextTools: ContextTool[] = [
     },
   },
   {
+    name: "message_person",
+    description:
+      "Send a message to the person who follows your work: progress, a finding, a question. At most one a turn. It " +
+      "does not wait: a reply, if one comes, is put before the prompt of a later turn. Keep working meanwhile.",
+    parameters: {
+      type: "object",
+      properties: { text: { type: "string", description: "The message, in a few lines." } },
+      required: ["text"],
+    },
+    run(a, env) {
+      const text = String(a.text).trim();
+      if (!text) return "error: the message is empty";
+      return env.sendMessage(text);
+    },
+  },
+  {
     name: "end_turn",
     description:
       "End this turn after this step's calls. With a summary, every message of this turn — from its prompt on — is " +
       "replaced by the summary, which keeps your context small. With next, set the prompt of your next turn. " +
-      "Replying without any tool call ends the turn too, but keeps all its messages.",
+      "Replying without any tool call ends the turn too: your reply then stands in for the summary.",
     parameters: {
       type: "object",
       properties: {
@@ -320,8 +354,9 @@ function checkNext(text: string, env: ContextEnv): string | undefined {
   }
   if (WAITING.test(t)) {
     return (
-      "error: the next prompt waits — for a user, a request or approval — and no user will answer: the turn would be " +
-      "wasted. Decide what to do next yourself and say it; if your goal is done, rewrite ## Goal with a new one and start it"
+      "error: the next prompt waits — for a user, a request or approval — and a prompt is answered by no one: the turn " +
+      "would be wasted. To ask the person, use message_person; a reply comes before a later turn, if at all. Decide " +
+      "what to do next yourself and say it; if your goal is done, rewrite ## Goal with a new one and start it"
     );
   }
   if (DONE_REPORT.test(t)) {

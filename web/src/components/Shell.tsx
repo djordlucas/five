@@ -1,7 +1,7 @@
 import type { ComponentChildren } from 'preact';
 import { useLocation } from 'preact-iso';
-import { online, status } from '../live';
-import { sectionFor, sections } from '../sections';
+import { inboxSeen, online, status } from '../live';
+import { type Section, sectionFor, sections } from '../sections';
 import { cycleTheme, theme } from '../theme';
 import { Icon } from './Icon';
 import { Badge } from './ui';
@@ -28,6 +28,7 @@ export function Shell({ children }: { children: ComponentChildren }) {
           >
             <Icon name={s.icon} />
             <span>{s.label}</span>
+            <Unread s={s} />
           </a>
         ))}
         <div class={styles.railFoot}>
@@ -49,6 +50,7 @@ export function Shell({ children }: { children: ComponentChildren }) {
           <a key={s.path} href={s.path} class={styles.tab} aria-current={s === current ? 'page' : undefined}>
             <Icon name={s.icon} />
             <span>{s.label}</span>
+            <Unread s={s} />
           </a>
         ))}
         <button type="button" class={styles.tab} onClick={cycleTheme} aria-label="Change theme">
@@ -58,6 +60,13 @@ export function Shell({ children }: { children: ComponentChildren }) {
       </nav>
     </div>
   );
+}
+
+/** A dot on the Inbox link while five has a message this browser has not seen. */
+function Unread({ s }: { s: Section }) {
+  const last = status.value?.inboxLast ?? 0;
+  if (s.path !== '/inbox' || last <= inboxSeen.value) return null;
+  return <span class={styles.unread} role="status" aria-label="New message" />;
 }
 
 /** What the loop is doing, on every page. */

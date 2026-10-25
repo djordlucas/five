@@ -237,3 +237,7 @@
     max-width: 90%;
   }
 }
+
+.inbox {
+  color: var(--text);
+}

@@ -46,6 +46,8 @@ export type EventBody =
     }
   | { type: "turn_ended"; reason: TurnEnd; next: string; error?: string }
   | { type: "context"; by: "model" | "user" | "five"; change: string }
+  /** A message in the inbox: five's to the person, or the person's to five. */
+  | { type: "inbox"; from: InboxMessage["from"]; text: string }
   | { type: "loop"; state: "started" | "paused"; reason?: string };
 
 export type Event = EventBody & { seq: number; at: string; turn: number };
@@ -77,10 +79,31 @@ export interface Status {
   tools: number;
   /** The last event's seq: a client that has it is up to date. */
   lastSeq: number;
+  /** The id of five's latest message to the person; 0 when none. */
+  inboxLast: number;
+}
+
+/** A message between five and the person who follows it. */
+export interface InboxMessage {
+  id: number;
+  at: string;
+  /** The turn it was sent in; for the person's, the turn running or last ended then. */
+  turn: number;
+  from: "five" | "person";
+  text: string;
+  /** For the person's: the turn it was put before, once delivered. */
+  deliveredTurn?: number;
+}
+
+export interface InboxPage {
+  /** Newest first. */
+  messages: InboxMessage[];
 }
 
 export interface ContextView {
   system: string;
+  /** Five's self block, rebuilt for every model call and sent after the system prompt. */
+  self: string;
   next: string;
   turn: number;
   messages: Message[];
