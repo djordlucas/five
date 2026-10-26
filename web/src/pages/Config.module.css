@@ -17,6 +17,9 @@
 }
 
 .group h2 {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
   margin-bottom: var(--space-2);
   font-size: var(--text-md);
 }

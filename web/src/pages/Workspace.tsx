@@ -57,9 +57,9 @@ export function InWorkspace({ children }: { children: ComponentChildren }) {
     <div class={styles.section}>
       <Segments
         items={[
-          { href: '/workspace', label: 'Files', current: tab === 'files' },
-          { href: '/workspace/context', label: 'Context', current: tab === 'context' },
-          { href: '/workspace/tools', label: 'Tools', current: tab === 'tools', count },
+          { href: '/workspace', label: 'Files', current: tab === 'files', icon: 'file' },
+          { href: '/workspace/context', label: 'Context', current: tab === 'context', icon: 'context' },
+          { href: '/workspace/tools', label: 'Tools', current: tab === 'tools', count, icon: 'tool' },
         ]}
       />
       {children}

@@ -1,4 +1,6 @@
 import { type ComponentChildren, Fragment } from 'preact';
+import type { IconName } from '../sections';
+import { Icon } from './Icon';
 import styles from './ui.module.css';
 
 export { styles as ui };
@@ -9,11 +11,16 @@ export function Badge({ state, children }: { state: string; children?: Component
 }
 
 /** A row of links that switch a view, the current one marked. */
-export function Segments({ items }: { items: { href: string; label: string; current: boolean; count?: number }[] }) {
+export function Segments({
+  items,
+}: {
+  items: { href: string; label: string; current: boolean; count?: number; icon?: IconName }[];
+}) {
   return (
     <nav class={styles.segments}>
       {items.map((i) => (
         <a key={i.href} href={i.href} class={styles.segment} aria-current={i.current ? 'page' : undefined}>
+          {i.icon && <Icon name={i.icon} size={16} />}
           {i.label}
           {i.count !== undefined && i.count > 0 && <span class={styles.count}>{i.count}</span>}
         </a>

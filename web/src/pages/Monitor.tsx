@@ -37,7 +37,9 @@ export function Monitor() {
     <div class={`${split.split} ${open ? split.open : ''}`}>
       <nav class={split.list} aria-label="Processes">
         <p class="muted">
-          {list === null ? 'Loading…' : `${list.length} since five started${running ? ` · ${running} live` : ''}`}
+          {list === null
+            ? 'Loading…'
+            : `${list.length} child ${list.length === 1 ? 'process' : 'processes'} since five started, one for each tool call that runs code${running ? ` · ${running} live` : ''}`}
         </p>
         {error && <p class="error">{error}</p>}
         {list?.length === 0 && <p class="muted">None yet: the agent has not run any code.</p>}
@@ -66,8 +68,9 @@ export function Monitor() {
           <Detail key={open} id={open} tick={tick} />
         ) : (
           <p class="card muted">
-            Each run of code is a Node.js process of its own, with all of Node and no permission model. Choose one to see its
-            code, arguments, output and result. Kept in memory: a restart of five starts the list over.
+            Each tool call that runs code — run_js, a tool the agent built, a define_tool trial, a background run — starts a
+            Node.js child process of its own, with all of Node and no permission model. Choose one to see its code,
+            arguments, output and result. Kept in memory: a restart of five starts the list over.
           </p>
         )}
       </section>
