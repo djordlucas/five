@@ -376,7 +376,7 @@ function FileView(props: { path: string; file: Loaded; onChanged: () => void }) 
   return (
     <article class={`card ${styles.detail}`}>
       <FileHead path={path} file={file}>
-        {file.text !== null && (
+        {file.text !== null && !mediaOf(path) && (
           <button type="button" class={`button ${styles.save}`} disabled={busy || !dirty} onClick={() => void save()}>
             <Icon name="save" size={16} />
             Save
@@ -394,7 +394,11 @@ function FileView(props: { path: string; file: Loaded; onChanged: () => void }) 
         </p>
       )}
       {notice && <p class={styles.notice}>{notice}</p>}
-      {file.text !== null ? (
+      {mediaOf(path) === 'image' ? (
+        <img class={styles.media} src={`${rawUrl(path)}&v=${file.version ?? ''}`} alt={path} />
+      ) : mediaOf(path) === 'pdf' ? (
+        <iframe class={styles.pdf} src={`${rawUrl(path)}&v=${file.version ?? ''}`} title={path} />
+      ) : file.text !== null ? (
         <textarea
           class={styles.editor}
           aria-label={`Contents of ${path}`}
@@ -408,10 +412,6 @@ function FileView(props: { path: string; file: Loaded; onChanged: () => void }) 
             }
           }}
         />
-      ) : mediaOf(path) === 'image' ? (
-        <img class={styles.media} src={`${rawUrl(path)}&v=${file.version ?? ''}`} alt={path} />
-      ) : mediaOf(path) === 'pdf' ? (
-        <iframe class={styles.pdf} src={`${rawUrl(path)}&v=${file.version ?? ''}`} title={path} />
       ) : (
         <p class="muted">
           {file.size > MAX_EDIT_BYTES ? `Over ${bytes(MAX_EDIT_BYTES)}, too large to edit here.` : 'Not a text file.'}{' '}
