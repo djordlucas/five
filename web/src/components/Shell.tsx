@@ -39,7 +39,8 @@ export function Shell({ children }: { children: ComponentChildren }) {
       <div class={styles.main}>
         <header class={styles.header}>
           <h1>{current.label}</h1>
-          <LoopState />
+          {/* Activity's own bar shows the loop. */}
+          {current.path !== '/' && <LoopState />}
           <LiveState />
         </header>
         <main class={styles.content}>{children}</main>
