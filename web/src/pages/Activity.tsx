@@ -306,7 +306,7 @@ function Working({ live }: { live: LiveWork }) {
         ? 'writing'
         : live.thinking
           ? 'thinking'
-          : 'reading its context';
+          : 'working';
   return (
     <div class={styles.working} role="status" aria-live="polite">
       <div class={styles.workingHead}>
