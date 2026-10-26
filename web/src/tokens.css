@@ -12,6 +12,12 @@
   --ok: #1d7a46;
   --warn: #9a6200;
   --danger: #b42318;
+  --code-key: #7a3fd1;
+  --code-string: #17803d;
+  --code-number: #b35900;
+  --code-literal: #c0266d;
+  --code-keyword: #2f5bd3;
+  --code-comment: #8a8f9c;
   --focus: #2f5bd3;
 
   --space-1: 4px;
@@ -50,6 +56,12 @@
     --ok: #4cc38a;
     --warn: #e0a83a;
     --danger: #ff7b72;
+    --code-key: #c3a6ff;
+    --code-string: #7fd8a0;
+    --code-number: #f2b35e;
+    --code-literal: #f58fc0;
+    --code-keyword: #8fadff;
+    --code-comment: #7d8494;
     --focus: #7c9cff;
     color-scheme: dark;
   }
@@ -67,6 +79,12 @@
   --ok: #4cc38a;
   --warn: #e0a83a;
   --danger: #ff7b72;
+  --code-key: #c3a6ff;
+  --code-string: #7fd8a0;
+  --code-number: #f2b35e;
+  --code-literal: #f58fc0;
+  --code-keyword: #8fadff;
+  --code-comment: #7d8494;
   --focus: #7c9cff;
   color-scheme: dark;
 }
@@ -163,4 +181,30 @@ h3 {
 
 .standalone {
   margin: var(--space-4);
+}
+
+/* Syntax colours (code.tsx). */
+.code-key {
+  color: var(--code-key);
+}
+
+.code-string {
+  color: var(--code-string);
+}
+
+.code-number {
+  color: var(--code-number);
+}
+
+.code-literal {
+  color: var(--code-literal);
+}
+
+.code-keyword {
+  color: var(--code-keyword);
+}
+
+.code-comment {
+  color: var(--code-comment);
+  font-style: italic;
 }

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'preact/hooks';
 import { type ContextView, del, get, type Message, message, post, put } from '../api/client';
+import { Code } from '../code';
 import { prettyArgs } from '../format';
 import { refresh, status } from '../live';
 import styles from './Context.module.css';
@@ -207,14 +208,14 @@ function MessageRow(props: {
           </div>
         </>
       ) : (
-        m.content && <pre class={styles.content}>{m.content}</pre>
+        m.content && <Code class={styles.content} text={m.content} />
       )}
       {calls.map((c) => (
         <details key={c.id} class={styles.call}>
           <summary>
             calls <code>{c.function.name}</code>
           </summary>
-          <pre class={styles.content}>{prettyArgs(c.function.arguments)}</pre>
+          <Code class={styles.content} text={prettyArgs(c.function.arguments)} lang="json" />
         </details>
       ))}
     </li>

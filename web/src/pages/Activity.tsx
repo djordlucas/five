@@ -1,6 +1,7 @@
 import { signal } from '@preact/signals';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { type Event, message, post } from '../api/client';
+import { Code } from '../code';
 import { Icon } from '../components/Icon';
 import type { IconName } from '../sections';
 import { Badge, Gauge } from '../components/ui';
@@ -322,8 +323,8 @@ function Step({ e, results }: { e: Of<'model'>; results: Map<string, Of<'tool'>>
               </span>
               {r && <At iso={r.at} />}
             </summary>
-            <pre class={styles.pre}>{prettyArgs(c.arguments)}</pre>
-            {r && <pre class={styles.pre}>{r.result}</pre>}
+            <Code class={styles.pre} text={prettyArgs(c.arguments)} lang="json" />
+            {r && <Code class={styles.pre} text={r.result} />}
           </details>
         );
       })}

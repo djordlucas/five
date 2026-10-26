@@ -1,3 +1,4 @@
+import { Code } from '../code';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { useLocation } from 'preact-iso';
 import { get, message, post, type ProcessDetail, type ProcessInfo } from '../api/client';
@@ -156,7 +157,11 @@ function Detail({ id, tick }: { id: string; tick: unknown }) {
       {p.state === 'ok' && (
         <section class={styles.part}>
           <h3>Result</h3>
-          <pre class={ui.pre}>{p.value === null || p.value === undefined ? '(no return value)' : pretty(p.value)}</pre>
+          {p.value === null || p.value === undefined ? (
+            <pre class={ui.pre}>(no return value)</pre>
+          ) : (
+            <Code class={ui.pre} text={pretty(p.value)} />
+          )}
         </section>
       )}
       <section class={styles.part}>
@@ -174,12 +179,12 @@ function Detail({ id, tick }: { id: string; tick: unknown }) {
       {p.args !== null && p.args !== undefined && (
         <section class={styles.part}>
           <h3>Arguments</h3>
-          <pre class={ui.pre}>{pretty(p.args)}</pre>
+          <Code class={ui.pre} text={pretty(p.args)} lang="json" />
         </section>
       )}
       <section class={styles.part}>
         <h3>Code</h3>
-        <pre class={`${ui.pre} ${styles.code}`}>{p.source || '(not readable)'}</pre>
+        <Code class={`${ui.pre} ${styles.code}`} text={p.source || '(not readable)'} lang={p.source ? 'js' : 'text'} />
       </section>
     </article>
   );

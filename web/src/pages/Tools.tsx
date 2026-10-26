@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'preact/hooks';
 import { get, message, type ToolDetail, type ToolInfo } from '../api/client';
+import { Code } from '../code';
 import { Badge, ui } from '../components/ui';
 import { ago, pretty } from '../format';
 import { status } from '../live';
@@ -63,9 +64,9 @@ function Tool({ name }: { name: string }) {
           )}
           <p>{tool.description}</p>
           <h3>Parameters</h3>
-          <pre class={ui.pre}>{pretty(tool.parameters)}</pre>
+          <Code class={ui.pre} text={pretty(tool.parameters)} lang="json" />
           <h3>Source</h3>
-          <pre class={ui.pre}>{tool.source}</pre>
+          <Code class={ui.pre} text={tool.source} lang="js" />
         </>
       )}
     </div>
