@@ -44,6 +44,7 @@ Preact, with seven's and nine's design tokens, polling the API once a second.
 |---|---|---|
 | Docker, Ollama on the host | `make up` · `make logs` · `make down` | `http://<host>:5555` |
 | Host, Node ≥ 24 | `npm ci && npm ci --prefix web && make start-host` | `http://127.0.0.1:5555` |
+| Working on the UI, beside either | `make ui-host`: the UI from source, reloading as you edit; its API calls go to five on :5555 | `http://<host>:5173` |
 
 Under Docker all data lives in `./workspace`. Configuration is environment
 only, but for the supervisor's settings, which the variables marked *supervisor*
