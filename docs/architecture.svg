@@ -34,11 +34,11 @@
   <!-- Outside: browser and Ollama -->
   <rect class="ext" x="40" y="110" width="460" height="140" rx="10"/>
   <text class="h" x="60" y="136">Web UI · web/ (Preact + Vite), served by five</text>
-  <text class="s" x="60" y="160">Loop — controls, window meter, every turn live</text>
-  <text class="s" x="60" y="179">Context — edit the prompts and messages, start over</text>
-  <text class="s" x="60" y="198">Tools — what the agent built, with source</text>
-  <text class="s" x="60" y="217">Workspace — its files and databases, read and edit</text>
-  <text class="s" x="60" y="236">Processes — every child process: output, result, kill</text>
+  <text class="s" x="60" y="160">Activity — controls, context gauge, each step live</text>
+  <text class="s" x="60" y="179">Workspace — files · context · tools · libraries</text>
+  <text class="s" x="60" y="198">Inbox — messages between five and you</text>
+  <text class="s" x="60" y="217">Config — the supervisor's settings, live</text>
+  <text class="s" x="60" y="236">Monitor — every child process: output, kill</text>
 
   <rect class="ext" x="1180" y="110" width="380" height="140" rx="10"/>
   <text class="h" x="1200" y="138">Ollama · on the host</text>
@@ -67,19 +67,19 @@
   <text class="h" x="98" y="398">HTTP API · src/api/server.ts</text>
   <text class="s" x="98" y="422">loop: start · pause · stop · step</text>
   <text class="s" x="98" y="442">context: read · edit · reset (clean) — refused during a turn</text>
-  <text class="s" x="98" y="462">status · events · tools · processes · workspace</text>
+  <text class="s" x="98" y="462">status · events · inbox · supervisor · tools · libraries</text>
 
   <!-- Loop -->
   <rect class="loop" x="80" y="492" width="520" height="408" rx="8"/>
-  <text class="h" x="98" y="518">Supervisor loop · src/agent/loop.ts</text>
+  <text class="h" x="98" y="518">Loop · src/agent/loop.ts</text>
 
   <circle cx="118" cy="555" r="11" fill="#0969da"/><text class="n" x="118" y="560" text-anchor="middle">1</text>
   <text class="s" x="138" y="553">The next prompt becomes a user message</text>
-  <text class="m" x="138" y="571">led by a [five] warning when the last call filled &gt; 60% of the window</text>
+  <text class="m" x="138" y="571">led by the person's messages and the supervisor's notes</text>
 
   <circle cx="118" cy="609" r="11" fill="#0969da"/><text class="n" x="118" y="614" text-anchor="middle">2</text>
-  <text class="s" x="138" y="607">Model call: system prompt + every message + the tool list</text>
-  <text class="m" x="138" y="625">tool calls the model writes as text are recovered (src/llm/textcalls.ts)</text>
+  <text class="s" x="138" y="607">Model call: system prompt + messages + self block + tools</text>
+  <text class="m" x="138" y="625">streamed: the UI shows it live · text tool calls are recovered</text>
 
   <circle cx="118" cy="663" r="11" fill="#0969da"/><text class="n" x="118" y="668" text-anchor="middle">3</text>
   <text class="s" x="138" y="661">Each tool call runs; its result is appended</text>
@@ -97,9 +97,9 @@
   <path class="lb" d="M 584 717 L 590 717 L 590 609 L 580 609" marker-end="url(#b)"/>
 
   <line x1="98" y1="815" x2="582" y2="815" stroke="#54aeff" stroke-width="1"/>
-  <text class="s" x="98" y="840">Guards: 3 turns in a row that do no work pause the loop</text>
-  <text class="m" x="98" y="861">a failed turn backs off 5 s → 60 s · the loop resumes after a restart if it was running</text>
-  <text class="m" x="98" y="881">otherwise five adds nothing: the context is the agent's</text>
+  <text class="s" x="98" y="840">Supervisor · src/agent/supervisor.ts — tuned live on Config</text>
+  <text class="m" x="98" y="861">warns and trims a full window · folds turns · pauses after idle turns</text>
+  <text class="m" x="98" y="881">notes a stale prompt · writes the self block · a failed turn backs off</text>
 
   <!-- Context -->
   <rect class="ctx" x="660" y="372" width="420" height="188" rx="8"/>
@@ -109,7 +109,7 @@
   <text class="s" x="678" y="468">next prompt · turn number</text>
   <text class="m" x="678" y="496">seeded by src/agent/prompt.ts; a reset starts over from it</text>
   <text class="m" x="678" y="516">changes apply from the next model call</text>
-  <text class="m" x="678" y="536">Ollama drops the oldest text when it overflows</text>
+  <text class="m" x="678" y="536">the self block follows it on every call: who it is, now</text>
 
   <!-- State -->
   <rect class="box" x="660" y="580" width="420" height="160" rx="8"/>
@@ -117,7 +117,7 @@
   <text class="s" x="678" y="630">SQLite: workspace/.five/five.db</text>
   <text class="s" x="678" y="652">meta — the context, whether the loop runs</text>
   <text class="s" x="678" y="674">events — the log the web UI follows</text>
-  <text class="s" x="678" y="696">tools · runs · tool_runs</text>
+  <text class="s" x="678" y="696">tools · libs · runs · tool_runs · inbox</text>
   <text class="m" x="678" y="722">saved after every change</text>
 
   <!-- Runner -->
@@ -139,26 +139,28 @@
   <text class="c" x="112" y="1034">set_system_prompt · edit_system_prompt</text>
   <text class="c" x="112" y="1056">edit_message · insert_message</text>
   <text class="c" x="112" y="1078">delete_messages</text>
-  <text class="c" x="112" y="1100">set_next_prompt</text>
+  <text class="c" x="112" y="1100">set_next_prompt · message_person</text>
   <text class="c" x="112" y="1122">end_turn(summary, next)</text>
   <text class="m" x="112" y="1148">change the context in memory</text>
 
   <rect class="mem" x="490" y="962" width="160" height="200" rx="6"/>
-  <text class="h" x="504" y="986">Memory</text>
+  <text class="h" x="504" y="986">Memory · media</text>
   <text class="c" x="504" y="1012">memory_write</text>
   <text class="c" x="504" y="1034">memory_read</text>
-  <text class="m" x="504" y="1126">notes that outlive</text>
-  <text class="m" x="504" y="1146">the context</text>
+  <text class="c" x="504" y="1056">view_image</text>
+  <text class="c" x="504" y="1078">read_pdf</text>
+  <text class="m" x="504" y="1126">notes outlive the</text>
+  <text class="m" x="504" y="1146">context; images seen</text>
 
   <rect class="box" x="664" y="962" width="398" height="200" rx="6" fill="#ffffff"/>
   <text class="h" x="678" y="986">seven's · src/agent/builtins</text>
-  <text class="c" x="678" y="1012">run_js · sql</text>
-  <text class="c" x="678" y="1034">define_tool · read_tool · delete_tool</text>
-  <text class="c" x="678" y="1056">start_tool · run_status · wait_run</text>
-  <text class="c" x="678" y="1078">kill_run · list_runs</text>
-  <text class="c" x="678" y="1100">tool_health · disable_tool · enable_tool</text>
-  <text class="h" x="678" y="1130">+ the agent's own tools</text>
-  <text class="m" x="678" y="1150">src/tools/store.ts · in .five/tools/&lt;name&gt;</text>
+  <text class="c" x="678" y="1012">run_js · sql · define_tool · read_tool</text>
+  <text class="c" x="678" y="1034">delete_tool · tool_health · enable_tool</text>
+  <text class="c" x="678" y="1056">disable_tool · start_tool · run_status</text>
+  <text class="c" x="678" y="1078">wait_run · kill_run · list_runs</text>
+  <text class="c" x="678" y="1100">define/read/delete_library · rebuild_tool</text>
+  <text class="h" x="678" y="1130">+ the agent's own tools and libraries</text>
+  <text class="m" x="678" y="1150">src/tools/store.ts, libs.ts · bundled at a revision</text>
 
   <!-- Right column: child processes and workspace -->
   <rect class="box" x="1140" y="760" width="400" height="200" rx="8" fill="#ffffff"/>
@@ -172,7 +174,7 @@
   <rect class="mem" x="1140" y="980" width="400" height="198" rx="8"/>
   <text class="h" x="1158" y="1006">Workspace · /workspace</text>
   <text class="c" x="1158" y="1032">memory/*.md</text><text class="s" x="1278" y="1032">the agent's notes</text>
-  <text class="c" x="1158" y="1054">results/</text><text class="s" x="1278" y="1054">long results of runs</text>
+  <text class="c" x="1158" y="1054">results/</text><text class="s" x="1278" y="1054">long results of runs, images</text>
   <text class="c" x="1158" y="1076">…</text><text class="s" x="1278" y="1076">whatever the agent makes</text>
   <text class="c" x="1158" y="1098">.five/</text><text class="s" x="1278" y="1098">five.db · tools/ · node_modules</text>
   <text class="s" x="1278" y="1120">five.log</text>
