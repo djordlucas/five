@@ -85,6 +85,15 @@ CREATE TABLE IF NOT EXISTS runs (
   started_at TEXT NOT NULL,
   checked INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS libs (
+  name TEXT PRIMARY KEY,
+  description TEXT NOT NULL,
+  deps TEXT NOT NULL,
+  source TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS inbox (
   id INTEGER PRIMARY KEY,
   at TEXT NOT NULL,
@@ -109,9 +118,15 @@ export class State {
     this.db = new DatabaseSync(this.path);
     this.db.exec("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;");
     this.db.exec(SCHEMA);
-    // An inbox from before subjects: add the column.
-    const cols = this.db.prepare("PRAGMA table_info(inbox)").all() as { name: string }[];
-    if (!cols.some((c) => c.name === "subject")) this.db.exec("ALTER TABLE inbox ADD COLUMN subject TEXT");
+    // A database from before these columns: add them.
+    this.addColumn("inbox", "subject", "TEXT");
+    this.addColumn("tools", "libs", "TEXT");
+    this.addColumn("tools", "bundle", "TEXT");
+  }
+
+  private addColumn(table: string, column: string, type: string): void {
+    const cols = this.db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+    if (!cols.some((c) => c.name === column)) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
   }
 
   close(): void {

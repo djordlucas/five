@@ -13,10 +13,13 @@ import type {
   EventsPage,
   InboxMessage,
   InboxPage,
+  LibraryDetail,
+  LibraryInfo,
   ProcessDetail,
   ProcessInfo,
   Status,
   SupervisorView,
+  ToolDetail,
   WorkspaceDir,
   WorkspaceEntry,
 } from "../src/api/types.ts";
@@ -862,4 +865,108 @@ test("view_image shrinks an image and shows it after the step's results; read_pd
         .equals(Buffer.from([0xff, 0xd8])),
     "a JPEG",
   );
+});
+
+test("libraries: bundled into a tool at their revision, with the tools a change leaves behind, and rebuild_tool", async () => {
+  const lib = (code: string, extra: Record<string, unknown> = {}): [string, Record<string, unknown>] => [
+    "define_library",
+    { name: "greet", description: "hello(name)", code, ...extra },
+  ];
+  const { five, model, cfg } = make([
+    {
+      calls: [
+        lib("export const hello = (n: string) => `hello ${n}`;", {
+          test_code: 'import { hello } from "lib:greet"; export default hello("test");',
+        }),
+        [
+          "define_tool",
+          {
+            name: "say",
+            description: "Greets.",
+            parameters: { type: "object", properties: { who: { type: "string" } }, required: ["who"] },
+            code: 'import { hello } from "lib:greet";\nexport default async ({ who }) => hello(who);',
+            test_args: { who: "trial" },
+          },
+        ],
+        ["run_js", { code: 'import { hello } from "lib:nope"; export default 1;' }],
+      ],
+    },
+    { calls: [["say", { who: "ada" }]] },
+    {
+      calls: [
+        lib("export const hello = (n: string) => `HI ${n}`;", {
+          test_code: 'import { hello } from "lib:greet"; throw new Error("no");',
+        }),
+        lib("export const hello = (n: string) => `HI ${n}`;"),
+        ["say", { who: "bo" }],
+        ["read_tool", { name: "say" }],
+        ["delete_library", { name: "greet" }],
+        ["rebuild_tool", { name: "say", test_args: { who: "x" } }],
+      ],
+    },
+    {
+      calls: [
+        ["say", { who: "cy" }],
+        ["read_library", {}],
+      ],
+    },
+    { content: "done" },
+  ]);
+  await turn(five);
+  // The results of the step before request i: the tool messages after its last assistant message.
+  const results = (i: number) => {
+    const sent = model.requests[i] ?? [];
+    const last = sent.findLastIndex((m) => m.role === "assistant");
+    return sent.slice(last + 1).flatMap((m) => (m.role === "tool" ? [m.content] : []));
+  };
+
+  const [defined, tool, missing] = results(1);
+  assert.match(defined ?? "", /^saved lib:greet \(revision 1\)[\s\S]*No tool is built on it yet[\s\S]*hello test/);
+  assert.match(tool ?? "", /^saved say \(revision 1\)[\s\S]*Built on lib:greet r1/);
+  assert.match(missing ?? "", /^error: .*no library "nope"/);
+  assert.match(results(2)[0] ?? "", /hello ada/);
+
+  const [failed, revised, stillOld, read, refused, rebuilt] = results(3);
+  assert.match(failed ?? "", /^not saved: the test failed/);
+  assert.match(
+    revised ?? "",
+    /^saved lib:greet \(revision 2\)[\s\S]*say \(r1\)[\s\S]*say still runs an older revision: rebuild_tool/,
+  );
+  // The tool keeps the revision it was built on.
+  assert.match(stillOld ?? "", /hello bo/);
+  assert.match(read ?? "", /lib:greet r1: the library is at r2 now; rebuild_tool/);
+  assert.match(refused ?? "", /^error: lib:greet is in use by the tool say/);
+  assert.match(rebuilt ?? "", /^rebuilt say \(revision 2\) on lib:greet r2[\s\S]*HI x/);
+
+  // At the end of the turn: rebuilt on r2.
+  assert.deepEqual(five.store.get("say")?.meta.libs, [{ name: "greet", revision: 2 }]);
+  const [now, listed] = results(4);
+  assert.match(now ?? "", /HI cy/);
+  assert.match(listed ?? "", /^lib:greet r2 — hello\(name\) \(used by say\)/);
+
+  // The API: the library, who uses it, and each tool's libraries.
+  const server = createApi({ five, cfg, log: (await import("../src/log.ts")).noopLogger });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}/api/v1`;
+  try {
+    const list = (await (await fetch(`${base}/libraries`)).json()) as { libraries: LibraryInfo[] };
+    assert.deepEqual(list.libraries, [
+      {
+        name: "greet",
+        description: "hello(name)",
+        revision: 2,
+        updatedAt: list.libraries[0]?.updatedAt,
+        usedBy: [{ tool: "say", revision: 2 }],
+      },
+    ]);
+    const one = (await (await fetch(`${base}/libraries/greet`)).json()) as LibraryDetail;
+    assert.match(one.source, /HI/);
+    assert.deepEqual(one.importedBy, []);
+    assert.equal((await fetch(`${base}/libraries/nope`)).status, 404);
+    const tool = (await (await fetch(`${base}/tools/say`)).json()) as ToolDetail;
+    assert.deepEqual(tool.libs, [{ name: "greet", revision: 2, current: 2 }]);
+    assert.equal(((await (await fetch(`${base}/status`)).json()) as Status).libraries, 1);
+  } finally {
+    server.close();
+  }
 });

@@ -88,3 +88,10 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+.links {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding-left: var(--space-5);
+}

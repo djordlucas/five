@@ -84,6 +84,8 @@ export interface Status {
   messages: number;
   /** Tools the agent built. */
   tools: number;
+  /** Libraries the agent wrote. */
+  libraries: number;
   /** The last event's seq: a client that has it is up to date. */
   lastSeq: number;
   /** The id of five's latest message to the person; 0 when none. */
@@ -129,11 +131,31 @@ export interface ToolInfo {
   revision: number;
   updatedAt: string;
   disabled?: { at: string; reason: string };
+  /** The libraries bundled into it: the revision it was built on, and the library's now (absent when deleted). */
+  libs?: { name: string; revision: number; current?: number }[];
 }
 
 export interface ToolDetail extends ToolInfo {
   parameters: Record<string, unknown>;
   source: string;
+}
+
+/** A library: shared code tools import as "lib:<name>". */
+export interface LibraryInfo {
+  name: string;
+  description: string;
+  revision: number;
+  updatedAt: string;
+  /** The tools built on it, each at the revision bundled into it. */
+  usedBy: { tool: string; revision: number }[];
+}
+
+export interface LibraryDetail extends LibraryInfo {
+  source: string;
+  /** npm version ranges it asks for. */
+  deps: Record<string, string>;
+  /** Libraries that import it. */
+  importedBy: string[];
 }
 
 export interface ErrorBody {

@@ -102,6 +102,13 @@ export function Tools({ name }: { name?: string }) {
               <span class={styles.name}>{t.name}</span>
               <span class={styles.meta} title={new Date(t.updatedAt).toLocaleString()}>
                 r{t.revision} · {ago(t.updatedAt)}
+                {t.libs?.length ? ` · ${t.libs.map((l) => `lib:${l.name}`).join(', ')}` : ''}
+                {t.libs?.some((l) => l.current !== undefined && l.current !== l.revision) && (
+                  <>
+                    {' '}
+                    <Badge state="warn">behind</Badge>
+                  </>
+                )}
                 {t.disabled && (
                   <>
                     {' '}
@@ -139,6 +146,25 @@ function Tool({ name }: { name: string }) {
             </p>
           )}
           <p>{tool.description}</p>
+          {tool.libs && tool.libs.length > 0 && (
+            <>
+              <h3>Libraries bundled in</h3>
+              <ul class={styles.links}>
+                {tool.libs.map((l) => (
+                  <li key={l.name}>
+                    <a href={`/workspace/libraries/${l.name}`}>lib:{l.name}</a> <span class="muted">r{l.revision}</span>{' '}
+                    {l.current === undefined ? (
+                      <Badge state="disabled">deleted since</Badge>
+                    ) : l.current === l.revision ? (
+                      <Badge state="ok">current</Badge>
+                    ) : (
+                      <Badge state="warn">r{l.current} now: rebuild_tool updates it</Badge>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
           <h3>Parameters</h3>
           <Code class={ui.pre} text={pretty(tool.parameters)} lang="json" />
           <h3>Source</h3>

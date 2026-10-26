@@ -3,6 +3,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Runner, RunResult } from "../../runner/index.ts";
+import { type Bundled, bundleLibraries, importsLibraries } from "../../tools/libs.ts";
 import { type StoredTool, TOOL_NAME, type ToolStore } from "../../tools/store.ts";
 import { describeParams, inferParameters, isEmptySchema, normalizeParameters } from "../args.ts";
 import { lintNotes } from "../lint.ts";
@@ -35,11 +36,18 @@ export function codeBuiltins(isBuiltin: (name: string) => boolean): Builtin[] {
         required: ["code"],
       },
       async run(a, ctx) {
-        const handle = ctx.runner.startEval(withLastExpression(String(a.code)), {
-          args: a.args,
-          deps: asDeps(a.deps),
-          log: ctx.log,
-        });
+        let code = withLastExpression(String(a.code));
+        let deps = asDeps(a.deps);
+        if (importsLibraries(code)) {
+          try {
+            const built = await bundleLibraries(code, ctx.libs, ctx.runner.home);
+            code = built.code;
+            deps = { ...built.deps, ...deps };
+          } catch (err) {
+            return `error: ${err instanceof Error ? err.message : String(err)}`;
+          }
+        }
+        const handle = ctx.runner.startEval(code, { args: a.args, deps, log: ctx.log });
         return formatRun(await awaitRun(handle, ctx.signal)) + lintNotes(String(a.code));
       },
     },
@@ -48,7 +56,8 @@ export function codeBuiltins(isBuiltin: (name: string) => boolean): Builtin[] {
       description:
         "Create or replace a tool. It becomes callable by `name` from your next step " +
         "and persists across turns and restarts. The source's default export is `async (args) => result`. When " +
-        "test_args is given the tool is run once first, and it is only saved if that run succeeds.",
+        "test_args is given the tool is run once first, and it is only saved if that run succeeds. The source may " +
+        'import your libraries (`import { f } from "lib:name"`): they are bundled into the tool as they are now.',
       parameters: {
         type: "object",
         properties: {
@@ -96,13 +105,26 @@ export function codeBuiltins(isBuiltin: (name: string) => boolean): Builtin[] {
             if (inferred) parameters = inferred;
           }
         }
-        const unchanged = previous?.source === source ? previous.meta.revision : undefined;
+        let built: Bundled | undefined;
+        if (importsLibraries(source)) {
+          try {
+            built = await bundleLibraries(source, ctx.libs, ctx.runner.home);
+          } catch (err) {
+            return `not saved: ${err instanceof Error ? err.message : String(err)}`;
+          }
+        }
+        // What runs: the source, or the source with its libraries inlined.
+        const runnable = built?.code ?? source;
+        const unchanged =
+          previous?.source === source && (previous.bundle ?? previous.source) === runnable
+            ? previous.meta.revision
+            : undefined;
         const deps = asDeps(a.deps) ?? {};
         const timeoutMs = positive(a.timeout_ms, 0) || undefined;
 
         let packages: Awaited<ReturnType<Runner["install"]>>;
         try {
-          packages = await ctx.runner.install(source, deps, ctx.log);
+          packages = await ctx.runner.install(runnable, { ...built?.deps, ...deps }, ctx.log);
         } catch (err) {
           return `error: ${err instanceof Error ? err.message : String(err)}`;
         }
@@ -111,7 +133,7 @@ export function codeBuiltins(isBuiltin: (name: string) => boolean): Builtin[] {
 
         let trial = "";
         if (a.test_args !== undefined) {
-          const r = await trialRun(ctx, name, source, a.test_args, timeoutMs);
+          const r = await trialRun(ctx, name, runnable, a.test_args, timeoutMs);
           if (!r.ok) {
             ctx.log.info("tool not saved: trial run failed", { tool: name, error: r.error?.split("\n")[0] });
             return `not saved: the trial run failed${substituted(packages)}\n${formatRun(r)}${lintNotes(source)}`;
@@ -127,8 +149,10 @@ export function codeBuiltins(isBuiltin: (name: string) => boolean): Builtin[] {
             deps,
             packages,
             ...(timeoutMs && { timeoutMs }),
+            ...(built && { libs: built.libs }),
           },
           source,
+          ...(built && { bundle: built.code }),
         });
         ctx.log.info("tool saved", { tool: name, revision: meta.revision, packages: packages.map((p) => p.name) });
         if (inferred)
@@ -140,7 +164,10 @@ export function codeBuiltins(isBuiltin: (name: string) => boolean): Builtin[] {
           unchanged !== undefined
             ? `\nNote: this code is identical to revision ${unchanged}, so the tool behaves exactly as before. To fix a wrong result, change the code.`
             : "";
-        return `saved ${name} (revision ${meta.revision}). From your next step, call it as the tool ${name}, with arguments: ${describeParams(parameters)}${inferred ? " (taken from your test_args or code, since you gave no parameters)" : ""}.${same}${substituted(packages)}${trial}${lintNotes(source)}`;
+        const libs = built?.libs.length
+          ? `\nBuilt on ${built.libs.map((l) => `lib:${l.name} r${l.revision}`).join(", ")}: it keeps these revisions until rebuild_tool.`
+          : "";
+        return `saved ${name} (revision ${meta.revision}). From your next step, call it as the tool ${name}, with arguments: ${describeParams(parameters)}${inferred ? " (taken from your test_args or code, since you gave no parameters)" : ""}.${same}${libs}${substituted(packages)}${trial}${lintNotes(source)}`;
       },
     },
     {
@@ -150,7 +177,7 @@ export function codeBuiltins(isBuiltin: (name: string) => boolean): Builtin[] {
       async run(a, ctx) {
         const t = ctx.store.get(String(a.name));
         if (!t) return `error: no tool named "${String(a.name)}"`;
-        return `${JSON.stringify(t.meta, null, 2)}\n\n--- source ---\n${t.source}`;
+        return `${JSON.stringify(t.meta, null, 2)}${libraryLines(t, ctx)}\n\n--- source ---\n${t.source}`;
       },
     },
     {
@@ -217,6 +244,20 @@ export function codeBuiltins(isBuiltin: (name: string) => boolean): Builtin[] {
   ];
 }
 
+/** Which libraries a tool was built on, and whether each has changed since. */
+function libraryLines(tool: StoredTool, ctx: BuiltinContext): string {
+  if (!tool.meta.libs?.length) return "";
+  const lines = tool.meta.libs.map((l) => {
+    const now = ctx.libs.get(l.name)?.meta.revision;
+    if (now === undefined)
+      return `- lib:${l.name} r${l.revision}: the library is gone; the tool still runs the copy bundled into it`;
+    return now === l.revision
+      ? `- lib:${l.name} r${l.revision}: current`
+      : `- lib:${l.name} r${l.revision}: the library is at r${now} now; rebuild_tool builds the tool on it`;
+  });
+  return `\n\nlibraries bundled into it:\n${lines.join("\n")}`;
+}
+
 /** A line naming packages installed at their latest version because the range asked for matched none. */
 function substituted(packages: { name: string; version: string; unmatched?: string }[]): string {
   const subs = packages.filter((p) => p.unmatched);
@@ -240,7 +281,7 @@ export function hasEntry(source: string): boolean {
 }
 
 /** Run a candidate tool from a scratch file under the runner's home, so its imports resolve. */
-async function trialRun(
+export async function trialRun(
   ctx: BuiltinContext,
   name: string,
   source: string,

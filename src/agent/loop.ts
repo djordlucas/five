@@ -19,6 +19,7 @@ import { recoverToolCalls } from "../llm/textcalls.ts";
 import { type Logger, noopLogger, preview } from "../log.ts";
 import type { Runner } from "../runner/index.ts";
 import type { Context, Event, EventBody, State, TurnEnd } from "../state.ts";
+import type { LibraryStore } from "../tools/libs.ts";
 import type { ToolStore } from "../tools/store.ts";
 import { checkArgs, coerceArgs, parseArgs } from "./args.ts";
 import { awaitRun, type BuiltinContext, builtins, disabledError, formatRun, startGenerated } from "./builtins/index.ts";
@@ -38,6 +39,7 @@ const BACKOFF_MS = [5_000, 10_000, 30_000, 60_000];
 export interface LoopOptions {
   state: State;
   store: ToolStore;
+  libs: LibraryStore;
   runner: Runner;
   runs: RunTable;
   model: ChatModel;
@@ -83,6 +85,7 @@ export class Loop {
     this.supervisor = new Supervisor({
       state: opts.state,
       store: opts.store,
+      libs: opts.libs,
       workspace: opts.workspace,
       contextTokens: opts.contextTokens,
       defaults: opts.supervisor,
@@ -187,9 +190,9 @@ export class Loop {
     this.o.log.info("context reset");
   }
 
-  /** Delete the agent's tools, background runs and workspace files. */
+  /** Delete the agent's tools, libraries, background runs and workspace files. */
   private clean(): void {
-    const { workspace, store, runs, state, log } = this.o;
+    const { workspace, store, libs, runs, state, log } = this.o;
     // Run from the repo, the workspace is the repo: never delete that.
     if (fs.existsSync(path.join(workspace, ".git"))) {
       throw new Error(`the workspace ${workspace} is a git repository; its files are not deleted`);
@@ -197,6 +200,7 @@ export class Loop {
     runs.killAll(AGENT_ID);
     const tools = store.list().map((t) => t.name);
     for (const name of tools) store.remove(name);
+    for (const lib of libs.list()) libs.remove(lib.name);
     state.db.exec("DELETE FROM runs");
     const files = fs.readdirSync(workspace).filter((f) => f !== ".five");
     for (const f of files) fs.rmSync(path.join(workspace, f), { recursive: true, force: true });
@@ -501,6 +505,7 @@ export class Loop {
       agentId: AGENT_ID,
       runner: this.o.runner,
       store: this.o.store,
+      libs: this.o.libs,
       runs: this.o.runs,
       workspace: this.o.workspace,
       stateDb: this.o.stateDb,
