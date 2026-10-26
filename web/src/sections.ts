@@ -1,4 +1,4 @@
-export type IconName = 'activity' | 'inbox' | 'folder' | 'monitor' | 'config';
+export type IconName = 'activity' | 'inbox' | 'folder' | 'monitor' | 'config' | 'play' | 'pause' | 'step' | 'stop';
 
 export interface Section {
   path: string;

@@ -1,6 +1,7 @@
 import { signal } from '@preact/signals';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { type Event, message, post } from '../api/client';
+import { Icon } from '../components/Icon';
 import { Badge, Gauge } from '../components/ui';
 import { clock, duration, oneLine, prettyArgs } from '../format';
 import { events, loadMoreTurns, refresh, status, turnsLoaded } from '../live';
@@ -133,15 +134,18 @@ function Controls() {
         {loop.retryAt && <Badge state="warn">retry at {clock(loop.retryAt)}</Badge>}
         {loop.running ? (
           <button type="button" class={styles.action} onClick={() => void act('pause')} title="Stop looping once this turn ends">
+            <Icon name="pause" size={16} />
             Pause
           </button>
         ) : (
           <button type="button" class={styles.action} onClick={() => void act('start')}>
+            <Icon name="play" size={16} />
             Start
           </button>
         )}
         {!loop.running && !loop.busy && (
           <button type="button" class={styles.action} onClick={() => void act('step')} title="Run one turn">
+            <Icon name="step" size={16} />
             Step
           </button>
         )}
@@ -152,6 +156,7 @@ function Controls() {
             onClick={() => void act('stop')}
             title="Pause, and end this turn now"
           >
+            <Icon name="stop" size={16} />
             Stop turn
           </button>
         )}

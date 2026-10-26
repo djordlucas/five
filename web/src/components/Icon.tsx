@@ -7,6 +7,10 @@ const paths: Record<IconName, string> = {
   config: 'M4 7h10M18 7h2M4 17h4M12 17h8M16 5v4M10 15v4',
   monitor: 'M4 5h16v14H4zM8 10l3 2-3 2M13 15h3',
   folder: 'M3 6a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z',
+  play: 'M7 5v14l11-7z',
+  pause: 'M8 5v14M16 5v14',
+  step: 'M6 5v14l9-7zM18 5v14',
+  stop: 'M6 6h12v12H6z',
 };
 
 export function Icon({ name, size = 22 }: { name: IconName; size?: number }) {
