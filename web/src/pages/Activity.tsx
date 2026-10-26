@@ -1,10 +1,35 @@
+import { signal } from '@preact/signals';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { type Event, message, post } from '../api/client';
 import { Badge, Meter } from '../components/ui';
 import { clock, duration, oneLine, prettyArgs } from '../format';
-import { events, loadMoreTurns, refresh, status } from '../live';
+import { events, loadMoreTurns, refresh, status, turnsLoaded } from '../live';
 import { Markdown } from '../markdown';
 import styles from './Activity.module.css';
+
+/** The choices of how many turns the page shows, the last first. */
+const SHOW = [1, 2, 3, 5, 10, 20, 50];
+const shown = signal(readShown());
+
+function readShown(): number {
+  try {
+    const n = Number(localStorage.getItem('five.showTurns'));
+    return SHOW.includes(n) ? n : 3;
+  } catch {
+    return 3;
+  }
+}
+
+function setShown(n: number): void {
+  shown.value = n;
+  try {
+    localStorage.setItem('five.showTurns', String(n));
+  } catch {
+    // Not kept: the default comes back on the next load.
+  }
+  // The timeline loads 20 turns back at first: load more when asked for more.
+  if (n > turnsLoaded.value) void loadMoreTurns(n - turnsLoaded.value);
+}
 
 type Of<T extends Event['type']> = Extract<Event, { type: T }>;
 
@@ -52,17 +77,19 @@ export function Activity() {
     return () => window.removeEventListener('scroll', onScroll, true);
   }, []);
 
-  const first = turns[0]?.turn ?? 0;
+  const visible = turns.slice(-shown.value);
+  const hidden = (visible[0]?.turn ?? 0) - 1;
+  const more = SHOW.find((n) => n > shown.value);
   return (
     <div class={styles.page}>
       <Controls />
-      {first > 1 && (
-        <button type="button" class={styles.more} onClick={() => void loadMoreTurns()}>
-          Show 20 earlier turns
+      {hidden > 0 && more && (
+        <button type="button" class={styles.more} onClick={() => setShown(more)}>
+          {hidden} earlier {hidden === 1 ? 'turn' : 'turns'} hidden · show the last {more}
         </button>
       )}
       {turns.length === 0 && <p class="muted">No turns yet. Start the loop, or run one step.</p>}
-      {turns.map((t) => (
+      {visible.map((t) => (
         <TurnView key={t.turn} t={t} />
       ))}
       <div ref={bottom} />
@@ -102,6 +129,7 @@ function Controls() {
         <span class="muted">{facts.join(' · ')}</span>
       </div>
       <div class={styles.actions}>
+        <ShownTurns />
         {loop.retryAt && <Badge state="warn">retry at {clock(loop.retryAt)}</Badge>}
         {loop.running ? (
           <button type="button" class={styles.action} onClick={() => void act('pause')} title="Stop looping once this turn ends">
@@ -133,6 +161,30 @@ function Controls() {
       </div>
       {error && <p class="error">{error}</p>}
     </header>
+  );
+}
+
+/** ‹ last N turns ›: how much of the timeline the page shows. */
+function ShownTurns() {
+  const i = SHOW.indexOf(shown.value);
+  const n = shown.value;
+  return (
+    <div class={styles.stepper} role="group" aria-label="Turns shown">
+      <button type="button" disabled={i <= 0} onClick={() => setShown(SHOW[i - 1] as number)} aria-label="Fewer turns">
+        ‹
+      </button>
+      <span>
+        last {n} {n === 1 ? 'turn' : 'turns'}
+      </span>
+      <button
+        type="button"
+        disabled={i >= SHOW.length - 1}
+        onClick={() => setShown(SHOW[i + 1] as number)}
+        aria-label="More turns"
+      >
+        ›
+      </button>
+    </div>
   );
 }
 

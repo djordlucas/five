@@ -65,6 +65,43 @@
   background: var(--surface-2);
 }
 
+.stepper {
+  display: flex;
+  align-items: center;
+  min-height: 36px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.stepper span {
+  min-width: 88px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.stepper button {
+  align-self: stretch;
+  min-width: 32px;
+  border: none;
+  border-radius: var(--radius);
+  background: none;
+  color: var(--text);
+  font-size: var(--text-lg);
+  cursor: pointer;
+}
+
+.stepper button:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+
+.stepper button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
 .window {
   flex-basis: 100%;
 }
