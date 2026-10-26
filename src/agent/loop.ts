@@ -68,6 +68,15 @@ export class Loop {
   /** Why the supervisor wants the loop paused after the turn that ended, if it does. */
   private pauseFor?: string;
   private retryAt: number | null = null;
+  /** The step in progress, for the status: the model writing, or a tool running. */
+  private live?: {
+    step: number;
+    phase: "model" | "tool";
+    startedAt: number;
+    tool?: string;
+    thinking?: string;
+    content?: string;
+  };
   /** Images view_image attached in this step, shown after its results. */
   private attached: string[] = [];
   private abort?: AbortController;
@@ -102,6 +111,16 @@ export class Loop {
       step: this.step,
       promptTokens: this.promptTokens,
       retryAt: this.retryAt ? new Date(this.retryAt).toISOString() : null,
+      ...(this.live && {
+        live: {
+          step: this.live.step,
+          phase: this.live.phase,
+          startedAt: new Date(this.live.startedAt).toISOString(),
+          ...(this.live.tool && { tool: this.live.tool }),
+          ...(this.live.thinking && { thinking: tail(this.live.thinking) }),
+          ...(this.live.content && { content: tail(this.live.content) }),
+        },
+      }),
     };
   }
 
@@ -288,6 +307,7 @@ export class Loop {
         const tools = this.tools();
         const t0 = performance.now();
         const self = this.supervisor.selfBlock(ctx, step, this.promptTokens);
+        this.live = { step, phase: "model", startedAt: Date.now() };
         const completion = await this.o.model.complete({
           messages: [
             { role: "system", content: ctx.system },
@@ -298,6 +318,9 @@ export class Loop {
           signal: this.abort.signal,
           log: stepLog,
           image: (p) => imageData(this.o.workspace, p),
+          onProgress: ({ thinking, content }) => {
+            if (this.live?.phase === "model") Object.assign(this.live, { thinking, content });
+          },
         });
         const durationMs = Math.round(performance.now() - t0);
         this.promptTokens = completion.usage?.prompt_tokens ?? this.promptTokens;
@@ -337,6 +360,7 @@ export class Loop {
         let summary: string | undefined;
         this.attached = [];
         for (const call of message.tool_calls) {
+          this.live = { step, phase: "tool", startedAt: Date.now(), tool: call.function.name };
           const t1 = performance.now();
           const raw = await this.dispatch(call, stepLog, (s) => {
             end = true;
@@ -384,6 +408,7 @@ export class Loop {
     } finally {
       const steps = Math.min(this.step, this.o.maxSteps);
       this.step = 0;
+      this.live = undefined;
       this.busy = false;
       this.abort = undefined;
       this.pauseFor = this.supervisor.ended({ worked, reason, prompt, next: ctx.next });
@@ -526,4 +551,9 @@ export class Loop {
 
 function isFailure(result: string): boolean {
   return result.startsWith("error:") || result.startsWith("not saved:");
+}
+
+/** The end of a long text: what the status carries of a reply in progress. */
+function tail(text: string, max = 4000): string {
+  return text.length > max ? `…${text.slice(-max)}` : text;
 }

@@ -15,6 +15,7 @@ import type {
   InboxPage,
   LibraryDetail,
   LibraryInfo,
+  LiveWork,
   ProcessDetail,
   ProcessInfo,
   Status,
@@ -966,6 +967,91 @@ test("libraries: bundled into a tool at their revision, with the tools a change 
     const tool = (await (await fetch(`${base}/tools/say`)).json()) as ToolDetail;
     assert.deepEqual(tool.libs, [{ name: "greet", revision: 2, current: 2 }]);
     assert.equal(((await (await fetch(`${base}/status`)).json()) as Status).libraries, 1);
+  } finally {
+    server.close();
+  }
+});
+
+test("the status shows the step in progress: the model's reply as it streams, then each tool as it runs", async () => {
+  const seen: (LiveWork | undefined)[] = [];
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "five-test-"));
+  const cfg = loadConfig({
+    FIVE_WORKSPACE: dir,
+    FIVE_TURN_DELAY_MS: "0",
+    FIVE_IDLE_TURNS: "0",
+    FIVE_FOLD_REPLIES: "off",
+  });
+  let n = 0;
+  let five: Five | undefined;
+  const model: ChatModel = {
+    async complete(req) {
+      req.onProgress?.({ thinking: "let me see", content: "I will" });
+      seen.push(five?.loop.status().live);
+      if (n++ > 0) return { message: { role: "assistant", content: "done" } };
+      return {
+        message: {
+          role: "assistant",
+          content: null,
+          tool_calls: [
+            {
+              id: "c1",
+              type: "function",
+              function: { name: "run_js", arguments: '{"code":"export default (seen => 1)()"}' },
+            },
+          ],
+        },
+      };
+    },
+  };
+  five = createFive(cfg, model);
+  open.push(five);
+  const during: (LiveWork | undefined)[] = [];
+  const watch = setInterval(() => during.push(five?.loop.status().live), 1);
+  await turn(five);
+  clearInterval(watch);
+  assert.equal(seen[0]?.phase, "model");
+  assert.equal(seen[0]?.step, 1);
+  assert.equal(seen[0]?.thinking, "let me see");
+  assert.equal(seen[0]?.content, "I will");
+  assert.ok(
+    during.some((l) => l?.phase === "tool" && l.tool === "run_js"),
+    "the tool showed while it ran",
+  );
+  assert.equal(five.loop.status().live, undefined);
+});
+
+test("the Ollama client reads a streamed reply as it arrives", async () => {
+  const http = await import("node:http");
+  const chunks = [
+    { message: { thinking: "Hm" } },
+    { message: { thinking: "m." } },
+    { message: { content: "Hel" } },
+    { message: { content: "lo" }, done: true, done_reason: "stop", prompt_eval_count: 7, eval_count: 3 },
+  ];
+  const server = http.createServer(async (req, res) => {
+    if (req.url === "/api/show") return res.end("{}");
+    res.writeHead(200, { "content-type": "application/x-ndjson" });
+    for (const c of chunks) {
+      res.write(`${JSON.stringify(c)}\n`);
+      await new Promise((r) => setTimeout(r, 15));
+    }
+    res.end();
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  try {
+    const { Ollama } = await import("../src/llm/ollama.ts");
+    const port = (server.address() as { port: number }).port;
+    const client = new Ollama({ model: "m", endpoint: `http://127.0.0.1:${port}`, contextTokens: 1000 });
+    const progress: string[] = [];
+    const out = await client.complete({
+      messages: [{ role: "user", content: "hi" }],
+      onProgress: (p) => progress.push(`${p.thinking}|${p.content}`),
+    });
+    assert.equal(out.message.content, "Hello");
+    assert.equal(out.message.thinking, "Hmm.");
+    assert.equal(out.usage?.prompt_tokens, 7);
+    assert.ok(progress.length >= 3, `progress came in pieces: ${progress.join(", ")}`);
+    assert.equal(progress.at(-1), "Hmm.|Hello");
   } finally {
     server.close();
   }

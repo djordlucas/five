@@ -65,6 +65,7 @@ export class Ollama implements ChatModel {
     signal,
     log = noopLogger,
     image,
+    onProgress,
   }: CompletionRequest): Promise<Completion> {
     const think = (await this.canThink()) ? this.opts.think : undefined;
     const body = JSON.stringify({
@@ -110,7 +111,7 @@ export class Ollama implements ChatModel {
       throw new Error(`ollama: ${res.status} ${res.statusText}: ${text.slice(0, 500)}`);
     }
 
-    const out = this.parse(merge(await res.text()));
+    const out = this.parse(await read(res, onProgress));
     log.info("model replied", {
       model: this.opts.model,
       duration_ms: ms,
@@ -167,24 +168,35 @@ export class Ollama implements ChatModel {
 }
 
 /**
- * One reply from a streamed body: NDJSON chunks, each with a piece of the
- * content and perhaps tool calls, the last with the counts. A body that is a
- * single JSON object (a non-streamed reply) is read the same way.
+ * One reply from a streamed body, read as it arrives: NDJSON chunks, each with
+ * a piece of the content and perhaps tool calls, the last with the counts.
+ * `onProgress` gets the thinking and text so far after each piece. A body that
+ * is a single JSON object (a non-streamed reply) is read the same way.
  */
-function merge(body: string): RawChat {
+async function read(res: Response, onProgress?: CompletionRequest["onProgress"]): Promise<RawChat> {
   const out: RawChat = { message: { content: "", thinking: "", tool_calls: [] } };
-  for (const line of body.split("\n")) {
-    if (!line.trim()) continue;
+  const m = out.message as { content: string; thinking: string; tool_calls: OllamaToolCall[] };
+  const add = (line: string) => {
+    if (!line.trim()) return;
     const chunk = JSON.parse(line) as RawChat & { error?: string };
     if (chunk.error) throw new Error(`ollama: ${chunk.error}`);
-    const m = chunk.message;
-    if (m?.content) (out.message as { content: string }).content += m.content;
-    if (m?.thinking) (out.message as { thinking: string }).thinking += m.thinking;
-    if (m?.tool_calls?.length) out.message?.tool_calls?.push(...m.tool_calls);
+    if (chunk.message?.content) m.content += chunk.message.content;
+    if (chunk.message?.thinking) m.thinking += chunk.message.thinking;
+    if (chunk.message?.tool_calls?.length) m.tool_calls.push(...chunk.message.tool_calls);
     if (chunk.done_reason) out.done_reason = chunk.done_reason;
     if (chunk.prompt_eval_count !== undefined) out.prompt_eval_count = chunk.prompt_eval_count;
     if (chunk.eval_count !== undefined) out.eval_count = chunk.eval_count;
+  };
+  const decoder = new TextDecoder();
+  let rest = "";
+  for await (const piece of (res.body ?? []) as AsyncIterable<Uint8Array>) {
+    rest += decoder.decode(piece, { stream: true });
+    const lines = rest.split("\n");
+    rest = lines.pop() ?? "";
+    for (const line of lines) add(line);
+    onProgress?.({ thinking: m.thinking, content: m.content });
   }
+  add(rest + decoder.decode());
   return out;
 }
 

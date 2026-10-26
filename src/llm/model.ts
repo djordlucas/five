@@ -35,6 +35,8 @@ export interface CompletionRequest {
   log?: Logger;
   /** A message's image, by its workspace path, as base64; undefined when it is gone. */
   image?: (path: string) => string | undefined;
+  /** The reply so far, as it streams in: its thinking and its text. */
+  onProgress?: (so: { thinking: string; content: string }) => void;
 }
 
 export interface ChatModel {

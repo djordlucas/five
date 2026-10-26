@@ -70,6 +70,22 @@ export interface LoopStatus {
   promptTokens: number | null;
   /** When the loop waits after a failed turn, until when. */
   retryAt: string | null;
+  /** What the turn is doing right now: the model writing its reply, or a tool running. */
+  live?: LiveWork;
+}
+
+/** The step in progress, for the UI to show it as it happens. */
+export interface LiveWork {
+  step: number;
+  /** "model": the model is writing; "tool": one of its calls runs. */
+  phase: "model" | "tool";
+  /** When this phase began. */
+  startedAt: string;
+  /** The tool running, in the "tool" phase. */
+  tool?: string;
+  /** The model's thinking and text so far (their ends, when long), in the "model" phase. */
+  thinking?: string;
+  content?: string;
 }
 
 export interface Status {

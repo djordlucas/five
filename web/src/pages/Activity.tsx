@@ -1,6 +1,6 @@
 import { signal } from '@preact/signals';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { type Event, message, post } from '../api/client';
+import { type Event, type LiveWork, message, post } from '../api/client';
 import { Code } from '../code';
 import { fileHref, rawUrl } from '../workspace';
 import { Icon } from '../components/Icon';
@@ -68,9 +68,11 @@ export function Activity() {
   const bottom = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
 
+  const live = status.value?.loop.busy ? status.value.loop.live : undefined;
+  // Follow the bottom as events arrive and as the model's reply streams in.
   useLayoutEffect(() => {
     if (stick.current) bottom.current?.scrollIntoView({ block: 'end' });
-  }, [events.value.length]);
+  }, [events.value.length, live?.phase, live?.thinking?.length, live?.content?.length]);
   useEffect(() => {
     const onScroll = () => {
       const b = bottom.current?.getBoundingClientRect();
@@ -93,7 +95,7 @@ export function Activity() {
       )}
       {turns.length === 0 && <p class="muted">No turns yet. Start the loop, or run one step.</p>}
       {visible.map((t) => (
-        <TurnView key={t.turn} t={t} />
+        <TurnView key={t.turn} t={t} live={t.turn === status.value?.loop.turn ? live : undefined} />
       ))}
       <div ref={bottom} />
     </div>
@@ -195,7 +197,7 @@ function ShownTurns() {
   );
 }
 
-function TurnView({ t }: { t: Turn }) {
+function TurnView({ t, live }: { t: Turn; live?: LiveWork }) {
   const prompt = t.started?.prompt;
   return (
     <section class={styles.turn} aria-label={`Turn ${t.turn}`}>
@@ -271,6 +273,7 @@ function TurnView({ t }: { t: Turn }) {
             );
         }
       })}
+      {live && <Working live={live} />}
     </section>
   );
 }
@@ -283,6 +286,42 @@ function Attached({ result }: { result: string }) {
     <a href={fileHref(path)} class={styles.attached} title={path}>
       <img src={rawUrl(path)} alt={path} loading="lazy" />
     </a>
+  );
+}
+
+/**
+ * The step in progress, so the page feels alive: a pulsing dot, what five is
+ * doing and for how long, and the model's thinking and reply as they stream in.
+ */
+function Working({ live }: { live: LiveWork }) {
+  const thinking = useRef<HTMLPreElement>(null);
+  useLayoutEffect(() => {
+    if (thinking.current) thinking.current.scrollTop = thinking.current.scrollHeight;
+  }, [live.thinking]);
+  const secs = Math.max(0, Math.round((Date.now() - Date.parse(live.startedAt)) / 1000));
+  const doing =
+    live.phase === 'tool'
+      ? `running ${live.tool}`
+      : live.content
+        ? 'writing'
+        : live.thinking
+          ? 'thinking'
+          : 'reading its context';
+  return (
+    <div class={styles.working} role="status" aria-live="polite">
+      <div class={styles.workingHead}>
+        <span class={styles.pulse} aria-hidden="true" />
+        <span>
+          step {live.step} · {doing}… <span class={styles.elapsed}>{secs} s</span>
+        </span>
+      </div>
+      {live.phase === 'model' && live.thinking && (
+        <pre ref={thinking} class={styles.liveThinking}>
+          {live.thinking}
+        </pre>
+      )}
+      {live.phase === 'model' && live.content && <div class={styles.liveContent}>{live.content}</div>}
+    </div>
   );
 }
 
