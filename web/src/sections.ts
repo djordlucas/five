@@ -8,10 +8,10 @@ export interface Section {
 
 export const sections: Section[] = [
   { path: '/', label: 'Activity', icon: 'activity' },
-  { path: '/inbox', label: 'Inbox', icon: 'inbox' },
   { path: '/workspace', label: 'Workspace', icon: 'folder' },
-  { path: '/monitor', label: 'Monitor', icon: 'monitor' },
+  { path: '/inbox', label: 'Inbox', icon: 'inbox' },
   { path: '/config', label: 'Config', icon: 'config' },
+  { path: '/monitor', label: 'Monitor', icon: 'monitor' },
 ];
 
 export function sectionFor(path: string): Section {
