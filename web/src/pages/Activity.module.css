@@ -218,6 +218,12 @@
   color: var(--text);
 }
 
+.kind {
+  display: inline-flex;
+  vertical-align: -2px;
+  margin-right: var(--space-2);
+}
+
 .toolTime {
   flex: none;
   font-family: var(--mono);

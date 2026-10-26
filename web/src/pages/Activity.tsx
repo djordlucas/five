@@ -2,6 +2,7 @@ import { signal } from '@preact/signals';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { type Event, message, post } from '../api/client';
 import { Icon } from '../components/Icon';
+import type { IconName } from '../sections';
 import { Badge, Gauge } from '../components/ui';
 import { clock, duration, oneLine, prettyArgs } from '../format';
 import { events, loadMoreTurns, refresh, status, turnsLoaded } from '../live';
@@ -202,7 +203,9 @@ function TurnView({ t }: { t: Turn }) {
       )}
       {t.started?.warning && (
         <p class={`${styles.line} ${styles.warn}`}>
-          <At iso={t.started.at} />⚠ {t.started.warning}
+          <At iso={t.started.at} />
+          <Kind icon="alert" />
+          {t.started.warning}
         </p>
       )}
       {prompt !== undefined && <div class={styles.prompt}>{prompt}</div>}
@@ -213,20 +216,26 @@ function TurnView({ t }: { t: Turn }) {
           case 'context':
             return (
               <p key={e.seq} class={styles.line}>
-                <At iso={e.at} />✎ {e.by === 'user' ? 'you' : e.by === 'five' ? 'five' : 'the agent'}: {e.change}
+                <At iso={e.at} />
+                <Kind icon={e.by === 'user' ? 'person' : e.by === 'five' ? 'chip' : 'edit'} />
+                {e.by === 'user' ? 'you' : e.by === 'five' ? 'five' : 'the agent'}: {e.change}
               </p>
             );
           case 'inbox':
             return (
               <p key={e.seq} class={`${styles.line} ${styles.inbox}`}>
-                <At iso={e.at} />✉ {e.from === 'five' ? 'to you' : 'you wrote'}: {oneLine(e.text, 240)} ·{' '}
+                <At iso={e.at} />
+                <Kind icon="inbox" />
+                {e.from === 'five' ? 'to you' : 'you wrote'}: {oneLine(e.text, 240)} ·{' '}
                 <a href="/inbox">inbox</a>
               </p>
             );
           case 'supervisor':
             return (
               <p key={e.seq} class={styles.line}>
-                <At iso={e.at} />⚙ <a href="/config">config</a>: {e.change}
+                <At iso={e.at} />
+                <Kind icon="config" />
+                <a href="/config">config</a>: {e.change}
               </p>
             );
           case 'turn_ended':
@@ -234,6 +243,7 @@ function TurnView({ t }: { t: Turn }) {
               <p key={e.seq} class={`${styles.end} ${e.reason === 'error' ? styles.failed : ''}`}>
                 <At iso={e.at} />
                 <span>
+                  <Kind icon="flag" />
                   Turn {t.turn} ended: {endLabel[e.reason]}
                   {e.error && ` — ${e.error}`}
                   {t.started && ` · ${duration(Date.parse(e.at) - Date.parse(t.started.at))}`}
@@ -249,6 +259,7 @@ function TurnView({ t }: { t: Turn }) {
             return (
               <p key={e.seq} class={styles.line}>
                 <At iso={e.at} />
+                <Kind icon={e.state === 'started' ? 'play' : 'pause'} />
                 Loop {e.state}
                 {e.reason && `: ${e.reason}`}
               </p>
@@ -262,6 +273,15 @@ function TurnView({ t }: { t: Turn }) {
 /** When an event happened, at the right edge of its box. */
 function At({ iso }: { iso: string }) {
   return <span class={styles.at}>{clock(iso)}</span>;
+}
+
+/** What kind of event a line is, and so whose: five's, the agent's or yours. */
+function Kind({ icon }: { icon: IconName }) {
+  return (
+    <span class={styles.kind}>
+      <Icon name={icon} size={14} />
+    </span>
+  );
 }
 
 const endLabel: Record<Of<'turn_ended'>['reason'], string> = {
