@@ -37,7 +37,9 @@ export function highlight(text: string, lang: Lang): ComponentChildren {
             : keyword && lang === 'js'
               ? 'keyword'
               : undefined;
-    out.push(kind ? <span class={`code-${kind}`}>{all}</span> : all);
+    // A JSON key shows without its quotes: easier to read; the data is unchanged.
+    const shown = kind === 'key' && lang === 'json' && all[0] === '"' ? all.slice(1, -1) : all;
+    out.push(kind ? <span class={`code-${kind}`}>{shown}</span> : shown);
     last = at + all.length;
   }
   if (last < text.length) out.push(text.slice(last));
