@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'preact/hooks';
 import { type ContextView, del, get, type Message, message, post, put } from '../api/client';
 import { Code } from '../code';
+import { Icon } from '../components/Icon';
+import type { IconName } from '../sections';
 import { prettyArgs } from '../format';
 import { refresh, status } from '../live';
 import styles from './Context.module.css';
@@ -46,6 +48,7 @@ export function Context() {
 
       <Field
         label="Next prompt"
+        icon="next"
         hint="The user message that starts the next turn."
         value={ctx.next}
         rows={3}
@@ -54,6 +57,7 @@ export function Context() {
       />
       <Field
         label="System prompt"
+        icon="context"
         hint={`${ctx.system.length.toLocaleString()} characters`}
         value={ctx.system}
         rows={10}
@@ -62,7 +66,10 @@ export function Context() {
       />
       <section class={`card ${styles.field}`}>
         <div class={styles.fieldHead}>
-          <h2>Self block</h2>
+          <h2>
+            <Icon name="person" size={18} />
+            Self block
+          </h2>
           <span class="muted">Written by five for every call, after the messages; read-only.</span>
         </div>
         <textarea class={styles.text} rows={6} value={ctx.self} readOnly aria-label="Self block" />
@@ -72,6 +79,7 @@ export function Context() {
       <details class={styles.messages} aria-label="Messages">
         <summary>
           <h2>
+            <Icon name="chat" size={18} />
             Messages <span class="muted">{ctx.messages.length}</span>
           </h2>
         </summary>
@@ -98,6 +106,7 @@ export function Context() {
 
 function Field(props: {
   label: string;
+  icon: IconName;
   hint: string;
   value: string;
   rows: number;
@@ -115,7 +124,10 @@ function Field(props: {
   return (
     <section class={`card ${styles.field}`}>
       <div class={styles.fieldHead}>
-        <h2>{props.label}</h2>
+        <h2>
+          <Icon name={props.icon} size={18} />
+          {props.label}
+        </h2>
         <span class="muted">{props.hint}</span>
       </div>
       <textarea
@@ -228,7 +240,10 @@ function Reset({ locked, onReset }: { locked: boolean; onReset: (clean: boolean)
   return (
     <section class={`card ${styles.reset}`}>
       <div>
-        <h2>Start over</h2>
+        <h2>
+          <Icon name="reset" size={18} />
+          Start over
+        </h2>
         <p class="muted">The seed system prompt and prompt, no messages, turn 0, and the timeline cleared.</p>
       </div>
       {sure ? (

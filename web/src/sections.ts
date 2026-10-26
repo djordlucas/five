@@ -1,4 +1,4 @@
-export type IconName = 'activity' | 'inbox' | 'folder' | 'monitor' | 'config' | 'play' | 'pause' | 'step' | 'stop' | 'alert' | 'flag' | 'edit' | 'person' | 'chip' | 'file' | 'context' | 'tool' | 'layers' | 'clock' | 'next' | 'plus' | 'upload' | 'download' | 'trash' | 'save' | 'search' | 'database';
+export type IconName = 'activity' | 'inbox' | 'folder' | 'monitor' | 'config' | 'play' | 'pause' | 'step' | 'stop' | 'alert' | 'flag' | 'edit' | 'person' | 'chip' | 'file' | 'context' | 'tool' | 'layers' | 'clock' | 'next' | 'plus' | 'upload' | 'download' | 'trash' | 'save' | 'search' | 'database' | 'chat' | 'reset';
 
 export interface Section {
   path: string;

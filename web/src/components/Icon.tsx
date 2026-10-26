@@ -29,6 +29,8 @@ const paths: Record<IconName, string> = {
   save: 'M5 4h11l3 3v13H5zM8 4v5h7V4M8 20v-6h8v6',
   search: 'M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20 20l-4-4',
   database: 'M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3zM4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3',
+  chat: 'M4 5h16v11H9l-5 4z',
+  reset: 'M4 12a8 8 0 1 0 3-6.2M4 4v4h4',
 };
 
 export function Icon({ name, size = 22 }: { name: IconName; size?: number }) {
