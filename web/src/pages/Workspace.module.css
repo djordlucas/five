@@ -112,8 +112,7 @@
 
 .kind {
   min-width: 34px;
-  font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--text-xs);
   color: var(--text-2);
 }
 
@@ -125,7 +124,7 @@
 
 .meta {
   grid-column: 2;
-  font-size: 12px;
+  font-size: var(--text-xs);
   color: var(--text-2);
 }
 
@@ -148,7 +147,7 @@
 
 .back {
   display: none;
-  font-size: 24px;
+  font-size: var(--text-xl);
   line-height: 1;
   text-decoration: none;
 }
@@ -167,7 +166,7 @@
 }
 
 .title span {
-  font-size: 12px;
+  font-size: var(--text-xs);
   overflow-wrap: anywhere;
 }
 
@@ -189,7 +188,7 @@
   background: var(--surface);
   color: var(--text);
   font-family: var(--mono);
-  font-size: 13px;
+  font-size: var(--code);
   line-height: 1.5;
   resize: vertical;
   tab-size: 2;
@@ -225,7 +224,7 @@
   width: 100%;
   border-collapse: collapse;
   font-family: var(--mono);
-  font-size: 12.5px;
+  font-size: var(--code);
 }
 
 .grid th,
@@ -257,7 +256,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
-  font-size: 12px;
+  font-size: var(--text-xs);
   cursor: pointer;
 }
 
@@ -294,7 +293,7 @@
 
 .field textarea {
   font-family: var(--mono);
-  font-size: 13px;
+  font-size: var(--code);
   resize: vertical;
 }
 
@@ -302,7 +301,7 @@
   display: flex;
   align-items: center;
   gap: var(--space-1);
-  font-size: 12px;
+  font-size: var(--text-xs);
   color: var(--text-2);
 }
 

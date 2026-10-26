@@ -31,8 +31,13 @@
   --radius-lg: 12px;
   --touch: 44px;
 
+  /* Two kinds of text. UI: --font, at one of the --text-* sizes. Code — what is
+     shown as it is, and names from it — --mono; a block of it at --code. */
   --font: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   --mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  --code: 13px;
+  --text-2xs: 11px;
+  --text-xs: 12px;
   --text-sm: 13px;
   --text-md: 15px;
   --text-lg: 18px;

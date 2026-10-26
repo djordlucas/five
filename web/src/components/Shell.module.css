@@ -197,7 +197,7 @@
     background: none;
     color: var(--text-2);
     position: relative;
-    font-size: 10.5px;
+    font-size: var(--text-2xs);
     text-decoration: none;
     cursor: pointer;
   }

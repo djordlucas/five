@@ -60,7 +60,7 @@
 
 .changed {
   color: var(--accent);
-  font-size: 12px;
+  font-size: var(--text-xs);
   font-weight: 400;
 }
 

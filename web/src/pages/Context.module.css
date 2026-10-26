@@ -34,7 +34,7 @@
   border-radius: var(--radius);
   background: var(--surface);
   font-family: var(--mono);
-  font-size: 13px;
+  font-size: var(--code);
   line-height: 1.5;
   resize: vertical;
 }
@@ -149,12 +149,12 @@
 }
 
 .index {
-  font-family: var(--mono);
   color: var(--text-2);
+  font-variant-numeric: tabular-nums;
 }
 
 .role {
-  font-family: var(--mono);
+  font-weight: 600;
 }
 
 .spacer {
@@ -166,7 +166,7 @@
   max-height: 200px;
   overflow: auto;
   font-family: var(--mono);
-  font-size: 13px;
+  font-size: var(--code);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
