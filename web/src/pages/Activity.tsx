@@ -36,8 +36,8 @@ type Of<T extends Event['type']> = Extract<Event, { type: T }>;
 interface Turn {
   turn: number;
   started?: Of<'turn_started'>;
-  items: (Of<'model'> | Of<'context'> | Of<'loop'> | Of<'inbox'> | Of<'supervisor'>)[];
-  ended?: Of<'turn_ended'>;
+  /** Everything after the prompt, in the order it happened, the turn's end among it. */
+  items: (Of<'model'> | Of<'context'> | Of<'loop'> | Of<'inbox'> | Of<'supervisor'> | Of<'turn_ended'>)[];
   /** Tool results by call id. */
   results: Map<string, Of<'tool'>>;
 }
@@ -52,7 +52,6 @@ function group(list: Event[]): Turn[] {
       turns.push(cur);
     }
     if (e.type === 'turn_started') cur.started = e;
-    else if (e.type === 'turn_ended') cur.ended = e;
     else if (e.type === 'tool') cur.results.set(e.id, e);
     else cur.items.push(e);
   }
@@ -225,6 +224,22 @@ function TurnView({ t }: { t: Turn }) {
                 <At iso={e.at} />⚙ <a href="/config">config</a>: {e.change}
               </p>
             );
+          case 'turn_ended':
+            return (
+              <p key={e.seq} class={`${styles.end} ${e.reason === 'error' ? styles.failed : ''}`}>
+                <At iso={e.at} />
+                <span>
+                  Turn {t.turn} ended: {endLabel[e.reason]}
+                  {e.error && ` — ${e.error}`}
+                  {t.started && ` · ${duration(Date.parse(e.at) - Date.parse(t.started.at))}`}
+                </span>
+                {prompt !== undefined && (
+                  <span class={styles.next}>
+                    {e.next === prompt ? 'next turn: same prompt' : `next prompt: ${oneLine(e.next, 160)}`}
+                  </span>
+                )}
+              </p>
+            );
           case 'loop':
             return (
               <p key={e.seq} class={styles.line}>
@@ -235,21 +250,6 @@ function TurnView({ t }: { t: Turn }) {
             );
         }
       })}
-      {t.ended && (
-        <p class={`${styles.end} ${t.ended.reason === 'error' ? styles.failed : ''}`}>
-          <At iso={t.ended.at} />
-          <span>
-            Turn {t.turn} ended: {endLabel[t.ended.reason]}
-            {t.ended.error && ` — ${t.ended.error}`}
-            {t.started && ` · ${duration(Date.parse(t.ended.at) - Date.parse(t.started.at))}`}
-          </span>
-          {prompt !== undefined && (
-            <span class={styles.next}>
-              {t.ended.next === prompt ? 'next turn: same prompt' : `next prompt: ${oneLine(t.ended.next, 160)}`}
-            </span>
-          )}
-        </p>
-      )}
     </section>
   );
 }
