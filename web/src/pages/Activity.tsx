@@ -1,7 +1,7 @@
 import { signal } from '@preact/signals';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { type Event, message, post } from '../api/client';
-import { Badge, Meter } from '../components/ui';
+import { Badge, Gauge } from '../components/ui';
 import { clock, duration, oneLine, prettyArgs } from '../format';
 import { events, loadMoreTurns, refresh, status, turnsLoaded } from '../live';
 import { Markdown } from '../markdown';
@@ -121,6 +121,7 @@ function Controls() {
   ];
   return (
     <header class={styles.bar}>
+      <Gauge value={used} max={s.contextTokens} warnAt={s.contextTokens * 0.8} label="Context window used" />
       <div class={styles.title}>
         <h2>
           Turn {loop.turn} · {s.model}
@@ -155,9 +156,6 @@ function Controls() {
             Stop turn
           </button>
         )}
-      </div>
-      <div class={styles.window}>
-        <Meter value={used} max={s.contextTokens} warnAt={s.contextTokens * 0.8} label="Context window used" />
       </div>
       {error && <p class="error">{error}</p>}
     </header>

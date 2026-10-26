@@ -102,10 +102,6 @@
   cursor: default;
 }
 
-.window {
-  flex-basis: 100%;
-}
-
 .more {
   align-self: center;
   min-height: 36px;

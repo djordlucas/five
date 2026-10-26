@@ -158,23 +158,51 @@
   text-align: center;
 }
 
-.meter {
-  height: 8px;
-  overflow: hidden;
-  border-radius: 4px;
-  background: var(--surface-2);
+.gauge {
+  position: relative;
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
 }
 
-.meter > span {
-  display: block;
-  height: 100%;
-  background: var(--accent);
+.gauge svg {
+  position: absolute;
+  inset: 3px;
+  width: calc(100% - 6px);
+  height: calc(100% - 6px);
+  /* The ring starts at the top and fills clockwise. */
+  transform: rotate(-90deg);
 }
 
-.meter[data-level='warn'] > span {
-  background: var(--warn);
+.gauge circle {
+  fill: none;
+  stroke-width: 3.5;
 }
 
-.meter[data-level='danger'] > span {
-  background: var(--danger);
+.track {
+  stroke: var(--surface-2);
+}
+
+.fill {
+  stroke: var(--accent);
+  transition: stroke-dasharray 0.4s;
+}
+
+.gauge[data-level='warn'] .fill {
+  stroke: var(--warn);
+}
+
+.gauge[data-level='danger'] .fill {
+  stroke: var(--danger);
+}
+
+.gauge > span {
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
