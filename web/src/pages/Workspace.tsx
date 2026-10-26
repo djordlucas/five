@@ -14,7 +14,10 @@ import {
   type WorkspaceDir,
   writeFile,
 } from '../api/client';
+import { Icon } from '../components/Icon';
 import { Badge, Segments, ui } from '../components/ui';
+import { ago } from '../format';
+import type { IconName } from '../sections';
 import { status } from '../live';
 import { asText, bytes, cell, crumbs, dirHref, fieldValue, fileHref, join, MAX_EDIT_BYTES, parent, version } from '../workspace';
 import styles from './Workspace.module.css';
@@ -31,20 +34,13 @@ export function Workspace() {
   const [changed, setChanged] = useState(0);
   const reload = () => setChanged((n) => n + 1);
 
-  return (
-    <div class={`${styles.split} ${file !== undefined ? styles.open : ''}`}>
-      <Files dir={dir} file={file} changed={changed} onChanged={reload} />
-      <section class={styles.pane} aria-label="File">
-        {file === undefined ? (
-          <p class="card muted">
-            The files the agent reads and writes: its memory/ notes, results/ of long runs, and everything it makes. Choose a
-            file to read or edit it; a SQLite database opens its tables.
-          </p>
-        ) : (
-          <Opened key={`${file}#${changed}`} path={file} table={query.table} sql={query.view === 'sql'} onChanged={reload} />
-        )}
-      </section>
-    </div>
+  // A directory as a grid of its entries; an open file takes the whole width.
+  return file === undefined ? (
+    <Files dir={dir} changed={changed} onChanged={reload} />
+  ) : (
+    <section class={styles.pane} aria-label="File">
+      <Opened key={`${file}#${changed}`} path={file} table={query.table} sql={query.view === 'sql'} onChanged={reload} />
+    </section>
   );
 }
 
@@ -69,11 +65,26 @@ export function InWorkspace({ children }: { children: ComponentChildren }) {
 
 // Files
 
-function Files({ dir, file, changed, onChanged }: { dir: string; file?: string; changed: number; onChanged: () => void }) {
+type Kind = 'all' | 'dir' | 'file' | 'db';
+type Sort = 'name' | 'newest' | 'largest';
+
+const KINDS: { value: Kind; label: string; icon?: IconName }[] = [
+  { value: 'all', label: 'All' },
+  { value: 'dir', label: 'Folders', icon: 'folder' },
+  { value: 'file', label: 'Files', icon: 'file' },
+  { value: 'db', label: 'Databases', icon: 'database' },
+];
+
+const kindOf = (e: WorkspaceDir['entries'][number]): Exclude<Kind, 'all'> => (e.dir ? 'dir' : e.sqlite ? 'db' : 'file');
+
+function Files({ dir, changed, onChanged }: { dir: string; changed: number; onChanged: () => void }) {
   const { route } = useLocation();
   const [data, setData] = useState<WorkspaceDir | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [search, setSearch] = useState('');
+  const [kind, setKind] = useState<Kind>('all');
+  const [sort, setSort] = useState<Sort>('name');
   // The agent writes files as it works: reload whenever something happened.
   const lastSeq = status.value?.lastSeq;
 
@@ -120,70 +131,127 @@ function Files({ dir, file, changed, onChanged }: { dir: string; file?: string; 
     });
   };
 
+  const all = data?.entries ?? [];
+  const needle = search.trim().toLowerCase();
+  const shown = all
+    .filter((e) => (kind === 'all' || kindOf(e) === kind) && (!needle || e.name.toLowerCase().includes(needle)))
+    .sort((a, b) => {
+      // Folders first, then by the chosen order.
+      if (a.dir !== b.dir) return a.dir ? -1 : 1;
+      if (sort === 'newest') return Date.parse(b.modified) - Date.parse(a.modified);
+      if (sort === 'largest') return (b.dir ? 0 : b.bytes) - (a.dir ? 0 : a.bytes);
+      return a.name.localeCompare(b.name);
+    });
+  const counts = { all: all.length, dir: 0, file: 0, db: 0 };
+  for (const e of all) counts[kindOf(e)]++;
+
   return (
-    <nav class={styles.list} aria-label="Files">
-      <ol class={styles.crumbs} aria-label="Directory">
-        {crumbs(dir).map((c) => (
-          <li key={c.path}>
-            <a href={dirHref(c.path)} aria-current={c.path === dir && file === undefined ? 'page' : undefined}>
-              {c.name}
-            </a>
-          </li>
-        ))}
-      </ol>
-      <div class={styles.actions}>
-        <button type="button" class={ui.action} disabled={busy} onClick={newFile}>
-          New file
-        </button>
-        <label class={`${ui.action} ${styles.upload}`}>
-          Upload
+    <section class={styles.browser} aria-label="Files">
+      <div class={styles.toolbar}>
+        <ol class={styles.crumbs} aria-label="Directory">
+          {crumbs(dir).map((c) => (
+            <li key={c.path}>
+              <a href={dirHref(c.path)} aria-current={c.path === dir ? 'page' : undefined}>
+                {c.name}
+              </a>
+            </li>
+          ))}
+        </ol>
+        <div class={styles.actions}>
+          <button type="button" class={ui.action} disabled={busy} onClick={newFile}>
+            <Icon name="plus" size={16} />
+            New file
+          </button>
+          <label class={`${ui.action} ${styles.upload}`}>
+            <Icon name="upload" size={16} />
+            Upload
+            <input
+              type="file"
+              multiple
+              disabled={busy}
+              onChange={(e) => {
+                upload(e.currentTarget.files);
+                e.currentTarget.value = '';
+              }}
+            />
+          </label>
+          {dir !== '' && data?.entries.length === 0 && (
+            <button
+              type="button"
+              class={`${ui.action} ${ui.danger}`}
+              disabled={busy}
+              onClick={() =>
+                void act(async () => {
+                  await del(`/workspace/file?path=${encodeURIComponent(dir)}`);
+                  route(dirHref(parent(dir)));
+                })
+              }
+            >
+              <Icon name="trash" size={16} />
+              Delete directory
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div class={styles.filters}>
+        <label class={styles.search}>
+          <Icon name="search" size={16} />
           <input
-            type="file"
-            multiple
-            disabled={busy}
-            onChange={(e) => {
-              upload(e.currentTarget.files);
-              e.currentTarget.value = '';
-            }}
+            type="search"
+            placeholder="Search this directory"
+            value={search}
+            aria-label="Search by name"
+            onInput={(e) => setSearch(e.currentTarget.value)}
           />
         </label>
-        {dir !== '' && data?.entries.length === 0 && (
-          <button
-            type="button"
-            class={`${ui.action} ${ui.danger}`}
-            disabled={busy}
-            onClick={() =>
-              void act(async () => {
-                await del(`/workspace/file?path=${encodeURIComponent(dir)}`);
-                route(dirHref(parent(dir)));
-              })
-            }
-          >
-            Delete directory
-          </button>
-        )}
+        <div class={styles.kinds} role="group" aria-label="Show">
+          {KINDS.map((k) => (
+            <button
+              key={k.value}
+              type="button"
+              class={styles.kindButton}
+              aria-pressed={kind === k.value}
+              onClick={() => setKind(k.value)}
+            >
+              {k.icon && <Icon name={k.icon} size={14} />}
+              {k.label}
+              <span class={styles.kindCount}>{counts[k.value]}</span>
+            </button>
+          ))}
+        </div>
+        <label class={styles.sort}>
+          Sort
+          <select value={sort} onChange={(e) => setSort(e.currentTarget.value as Sort)}>
+            <option value="name">Name</option>
+            <option value="newest">Newest</option>
+            <option value="largest">Largest</option>
+          </select>
+        </label>
       </div>
+
       {error && <p class="error">{error}</p>}
       {data?.entries.length === 0 && <p class="muted">This directory is empty.</p>}
-      <ul class={styles.entries}>
-        {data?.entries.map((e) => (
-          <li key={e.path}>
-            <a
-              href={e.dir ? dirHref(e.path) : fileHref(e.path)}
-              class={styles.entry}
-              aria-current={e.path === file ? 'page' : undefined}
-            >
-              <span class={styles.kind}>{e.dir ? 'dir' : e.sqlite ? 'db' : 'file'}</span>
-              <span class={styles.name}>{e.name}</span>
-              <span class={styles.meta}>
-                {e.dir ? '' : `${bytes(e.bytes)} · `}
-                {new Date(e.modified).toLocaleString()}
-              </span>
-            </a>
-          </li>
-        ))}
+      {data && all.length > 0 && shown.length === 0 && <p class="muted">Nothing here matches.</p>}
+      <ul class={styles.cards}>
+        {shown.map((e) => {
+          const k = kindOf(e);
+          return (
+            <li key={e.path}>
+              <a href={k === 'dir' ? dirHref(e.path) : fileHref(e.path)} class={styles.fileCard} data-kind={k} title={e.name}>
+                <span class={styles.fileIcon}>
+                  <Icon name={k === 'dir' ? 'folder' : k === 'db' ? 'database' : 'file'} size={22} />
+                </span>
+                <span class={styles.fileName}>{e.name}</span>
+                <span class={styles.fileMeta} title={new Date(e.modified).toLocaleString()}>
+                  {k === 'dir' ? 'folder' : bytes(e.bytes)} · {ago(e.modified)}
+                </span>
+              </a>
+            </li>
+          );
+        })}
       </ul>
-    </nav>
+    </section>
   );
 }
 
@@ -228,7 +296,7 @@ function FileHead(props: { path: string; file: Loaded; children?: ComponentChild
   const name = path.split('/').pop();
   return (
     <header class={styles.head}>
-      <a class={styles.back} href={dirHref(parent(path))} aria-label="The directory">
+      <a class={`${styles.back} ${styles.backShown}`} href={dirHref(parent(path))} aria-label="The directory">
         ‹
       </a>
       <div class={styles.title}>
@@ -242,6 +310,7 @@ function FileHead(props: { path: string; file: Loaded; children?: ComponentChild
       <div class={styles.actions}>
         {props.children}
         <a class={ui.action} href={`/api/v1/workspace/file?path=${encodeURIComponent(path)}&download=true`} download={name}>
+          <Icon name="download" size={16} />
           Download
         </a>
       </div>
@@ -295,10 +364,12 @@ function FileView(props: { path: string; file: Loaded; onChanged: () => void }) 
       <FileHead path={path} file={file}>
         {file.text !== null && (
           <button type="button" class={`button ${styles.save}`} disabled={busy || !dirty} onClick={() => void save()}>
+            <Icon name="save" size={16} />
             Save
           </button>
         )}
         <button type="button" class={`${ui.action} ${ui.danger}`} disabled={busy} onClick={() => void remove()}>
+          <Icon name="trash" size={16} />
           Delete
         </button>
       </FileHead>

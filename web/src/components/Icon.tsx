@@ -22,6 +22,13 @@ const paths: Record<IconName, string> = {
   layers: 'M12 3l9 5-9 5-9-5zM3 13l9 5 9-5',
   clock: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7v5l3 2',
   next: 'M5 12h14M13 6l6 6-6 6',
+  plus: 'M12 5v14M5 12h14',
+  upload: 'M12 20V8M7 13l5-5 5 5M4 4h16',
+  download: 'M12 4v12M7 11l5 5 5-5M4 20h16',
+  trash: 'M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3',
+  save: 'M5 4h11l3 3v13H5zM8 4v5h7V4M8 20v-6h8v6',
+  search: 'M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20 20l-4-4',
+  database: 'M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3zM4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3',
 };
 
 export function Icon({ name, size = 22 }: { name: IconName; size?: number }) {
