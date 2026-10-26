@@ -193,10 +193,14 @@ function TurnView({ t }: { t: Turn }) {
       {t.started && (
         <header class={styles.turnHead}>
           <span class={styles.turnNo}>Turn {t.turn}</span>
-          <span class="muted">{clock(t.started.at)}</span>
+          <At iso={t.started.at} />
         </header>
       )}
-      {t.started?.warning && <p class={`${styles.line} ${styles.warn}`}>⚠ {t.started.warning}</p>}
+      {t.started?.warning && (
+        <p class={`${styles.line} ${styles.warn}`}>
+          <At iso={t.started.at} />⚠ {t.started.warning}
+        </p>
+      )}
       {prompt !== undefined && <div class={styles.prompt}>{prompt}</div>}
       {t.items.map((e) => {
         switch (e.type) {
@@ -205,35 +209,40 @@ function TurnView({ t }: { t: Turn }) {
           case 'context':
             return (
               <p key={e.seq} class={styles.line}>
-                ✎ {e.by === 'user' ? 'you' : e.by === 'five' ? 'five' : 'the agent'}: {e.change}
+                <At iso={e.at} />✎ {e.by === 'user' ? 'you' : e.by === 'five' ? 'five' : 'the agent'}: {e.change}
               </p>
             );
           case 'inbox':
             return (
               <p key={e.seq} class={`${styles.line} ${styles.inbox}`}>
-                ✉ {e.from === 'five' ? 'to you' : 'you wrote'}: {oneLine(e.text, 240)} ·{' '}
+                <At iso={e.at} />✉ {e.from === 'five' ? 'to you' : 'you wrote'}: {oneLine(e.text, 240)} ·{' '}
                 <a href="/inbox">inbox</a>
               </p>
             );
           case 'supervisor':
             return (
               <p key={e.seq} class={styles.line}>
-                ⚙ <a href="/config">config</a>: {e.change}
+                <At iso={e.at} />⚙ <a href="/config">config</a>: {e.change}
               </p>
             );
           case 'loop':
             return (
               <p key={e.seq} class={styles.line}>
+                <At iso={e.at} />
                 Loop {e.state}
-                {e.reason && `: ${e.reason}`} · {clock(e.at)}
+                {e.reason && `: ${e.reason}`}
               </p>
             );
         }
       })}
       {t.ended && (
         <p class={`${styles.end} ${t.ended.reason === 'error' ? styles.failed : ''}`}>
-          Turn {t.turn} ended: {endLabel[t.ended.reason]}
-          {t.ended.error && ` — ${t.ended.error}`}
+          <At iso={t.ended.at} />
+          <span>
+            Turn {t.turn} ended: {endLabel[t.ended.reason]}
+            {t.ended.error && ` — ${t.ended.error}`}
+            {t.started && ` · ${duration(Date.parse(t.ended.at) - Date.parse(t.started.at))}`}
+          </span>
           {prompt !== undefined && (
             <span class={styles.next}>
               {t.ended.next === prompt ? 'next turn: same prompt' : `next prompt: ${oneLine(t.ended.next, 160)}`}
@@ -243,6 +252,11 @@ function TurnView({ t }: { t: Turn }) {
       )}
     </section>
   );
+}
+
+/** When an event happened, at the right edge of its box. */
+function At({ iso }: { iso: string }) {
+  return <span class={styles.at}>{clock(iso)}</span>;
 }
 
 const endLabel: Record<Of<'turn_ended'>['reason'], string> = {
@@ -257,6 +271,7 @@ function Step({ e, results }: { e: Of<'model'>; results: Map<string, Of<'tool'>>
   return (
     <div class={styles.step}>
       <div class={styles.stepHead}>
+        <At iso={e.at} />
         step {e.step} · {duration(e.durationMs)}
         {e.promptTokens !== undefined && ` · ${e.promptTokens.toLocaleString()} prompt tokens`}
         {e.fromText && ' · calls read from text'}
@@ -274,9 +289,11 @@ function Step({ e, results }: { e: Of<'model'>; results: Map<string, Of<'tool'>>
           <details key={c.id} class={styles.tool}>
             <summary>
               <span class={styles.toolName}>{c.name}</span>
+              {r && <span class={styles.toolTime}>{duration(r.durationMs)}</span>}
               <span class={`${styles.toolState} ${r && !r.ok ? styles.failed : 'muted'}`}>
                 {r ? oneLine(r.result, 120) : 'running…'}
               </span>
+              {r && <At iso={r.at} />}
             </summary>
             <pre class={styles.pre}>{prettyArgs(c.arguments)}</pre>
             {r && <pre class={styles.pre}>{r.result}</pre>}
