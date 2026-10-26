@@ -7,44 +7,42 @@ import { Icon } from './Icon';
 import { Badge } from './ui';
 import styles from './Shell.module.css';
 
-/** The frame around every section: a rail on desktop; a header and a bottom tab bar under 768px. */
+/**
+ * The frame around every section: a top bar with the sections as tabs on
+ * desktop; under 768px, a top bar with the current section's name and a
+ * bottom tab bar.
+ */
 export function Shell({ children }: { children: ComponentChildren }) {
   const { path } = useLocation();
   const current = sectionFor(path);
 
   return (
     <div class={styles.shell}>
-      <nav class={styles.rail} aria-label="Sections">
+      <header class={styles.top}>
         <a class={styles.brand} href="/" aria-label="Five">
           5
         </a>
-        {sections.map((s) => (
-          <a
-            key={s.path}
-            href={s.path}
-            class={styles.railLink}
-            aria-current={s === current ? 'page' : undefined}
-            title={s.label}
-          >
-            <Icon name={s.icon} />
-            <span>{s.label}</span>
-            <Unread s={s} />
-          </a>
-        ))}
-        <div class={styles.railFoot}>
-          <ThemeControl />
-        </div>
-      </nav>
-
-      <div class={styles.main}>
-        <header class={styles.header}>
-          <h1>{current.label}</h1>
+        <nav class={styles.nav} aria-label="Sections">
+          {sections.map((s) => (
+            <a key={s.path} href={s.path} class={styles.navLink} aria-current={s === current ? 'page' : undefined}>
+              <Icon name={s.icon} size={18} />
+              <span>{s.label}</span>
+              <Unread s={s} />
+            </a>
+          ))}
+        </nav>
+        <h1 class={styles.title}>{current.label}</h1>
+        <div class={styles.status}>
           {/* Activity's own bar shows the loop. */}
           {current.path !== '/' && <LoopState />}
           <LiveState />
-        </header>
-        <main class={styles.content}>{children}</main>
-      </div>
+          <ThemeControl />
+        </div>
+      </header>
+
+      <main class={styles.scroll}>
+        <div class={styles.content}>{children}</div>
+      </main>
 
       <nav class={styles.tabs} aria-label="Sections">
         {sections.map((s) => (
@@ -94,8 +92,8 @@ function LiveState() {
 function ThemeControl() {
   const label = { system: 'Theme: system', light: 'Theme: light', dark: 'Theme: dark' }[theme.value];
   return (
-    <button type="button" class={styles.control} onClick={cycleTheme}>
-      {label}
+    <button type="button" class={styles.control} onClick={cycleTheme} title={`${label} — change`} aria-label={label}>
+      <span class={styles.themeDot} />
     </button>
   );
 }
