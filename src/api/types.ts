@@ -52,7 +52,7 @@ export type EventBody =
   | { type: "turn_ended"; reason: TurnEnd; next: string; error?: string }
   | { type: "context"; by: "model" | "user" | "five"; change: string }
   /** A message in the inbox: five's to the person, or the person's to five. */
-  | { type: "inbox"; from: InboxMessage["from"]; subject?: string; text: string }
+  | { type: "inbox"; from: InboxMessage["from"]; subject?: string; text: string; asPrompt?: boolean }
   | { type: "loop"; state: "started" | "paused"; reason?: string }
   /** The supervisor's settings changed, from the API. */
   | { type: "supervisor"; change: string };
@@ -120,6 +120,8 @@ export interface InboxMessage {
   text: string;
   /** For the person's: the turn it was put before, once delivered. */
   deliveredTurn?: number;
+  /** A person's message sent as the next turn's prompt, in place of the one the agent set. */
+  asPrompt?: boolean;
 }
 
 export interface InboxPage {

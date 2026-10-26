@@ -232,7 +232,7 @@ function TurnView({ t, live }: { t: Turn; live?: LiveWork }) {
               <p key={e.seq} class={`${styles.line} ${styles.inbox}`}>
                 <At iso={e.at} />
                 <Kind icon="inbox" />
-                {e.from === 'five' ? 'to you' : 'you wrote'}: {e.subject && <strong>{e.subject} — </strong>}
+                {e.from === 'five' ? 'to you' : e.asPrompt ? 'you wrote, as the next prompt' : 'you wrote'}: {e.subject && <strong>{e.subject} — </strong>}
                 {oneLine(e.text, 240)} ·{' '}
                 <a href="/inbox">inbox</a>
               </p>

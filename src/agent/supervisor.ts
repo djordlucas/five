@@ -390,7 +390,7 @@ export class Supervisor {
       return `error: you sent the person ${max === 1 ? "a message" : `${max} messages`} this turn already; ${max === 1 ? "one" : max} a turn. Keep working.`;
     }
     this.messaged++;
-    const m = this.o.state.addInbox(turn, "five", text, subject);
+    const m = this.o.state.addInbox(turn, "five", text, { subject });
     this.o.emit({ type: "inbox", from: "five", subject, text });
     this.o.log.info("message sent", { id: m.id });
     return "sent. The person reads the inbox now and then; a reply, if one comes, is put before the prompt of a later turn. Do not wait for it: go on with your work.";

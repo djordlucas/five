@@ -73,3 +73,10 @@
   font-weight: 600;
   overflow-wrap: anywhere;
 }
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}

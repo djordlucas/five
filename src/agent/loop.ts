@@ -160,9 +160,9 @@ export class Loop {
   }
 
   /** A message from the person: put before the next turn's prompt. */
-  receive(text: string): InboxMessage {
-    const m = this.o.state.addInbox(this.ctx.turn, "person", text);
-    this.emit({ type: "inbox", from: "person", text });
+  receive(text: string, asPrompt = false): InboxMessage {
+    const m = this.o.state.addInbox(this.ctx.turn, "person", text, { asPrompt });
+    this.emit({ type: "inbox", from: "person", text, ...(asPrompt && { asPrompt }) });
     this.o.log.info("message received", { id: m.id });
     return m;
   }
@@ -283,11 +283,16 @@ export class Loop {
     const turn = ctx.turn;
     const log = this.o.log.child({ turn });
     const started = performance.now();
+    // The person's messages: one sent as the prompt becomes this turn's prompt; the others go before it.
+    const delivered = this.deliver(turn);
+    if (delivered.prompt !== undefined) {
+      ctx.next = delivered.prompt;
+      this.emit({ type: "context", by: "user", change: "this turn's prompt is your message, in place of the agent's" });
+    }
     const prompt = ctx.next;
     if (!this.o.state.getMeta("born")) this.o.state.setMeta("born", new Date().toISOString());
     const notes = this.supervisor.opening(ctx, this.promptTokens);
-    const delivered = this.deliver(turn);
-    if (delivered) notes.push(delivered);
+    if (delivered.note) notes.push(delivered.note);
     const warning = notes.join("\n\n") || undefined;
     this.turnPrompt = prompt;
     this.pauseFor = undefined;
@@ -425,16 +430,27 @@ export class Loop {
     }
   }
 
-  /** The person's messages not yet delivered, as the note this turn's prompt starts with. */
-  private deliver(turn: number): string | undefined {
+  /**
+   * The person's messages not yet delivered: a note this turn's prompt starts
+   * with, and the latest sent as the prompt, which becomes this turn's prompt.
+   */
+  private deliver(turn: number): { note?: string; prompt?: string } {
     const waiting = this.o.state.undelivered();
-    if (!waiting.length) return undefined;
+    if (!waiting.length) return {};
     this.o.state.markDelivered(
       waiting.map((m) => m.id),
       turn,
     );
-    const lines = waiting.map((m) => `[The person wrote to you, during turn ${m.turn}] ${m.text}`);
-    return `${lines.join("\n\n")}\n\n[five] Take it into account as you see fit; message_person answers. Your work goes on either way.`;
+    // The latest message sent as the prompt is the prompt; any others are notes before it.
+    const asPrompt = waiting.filter((m) => m.asPrompt).at(-1);
+    const notes = waiting.filter((m) => m !== asPrompt);
+    const lines = notes.map((m) => `[The person wrote to you, during turn ${m.turn}] ${m.text}`);
+    return {
+      ...(lines.length && {
+        note: `${lines.join("\n\n")}\n\n[five] Take it into account as you see fit; message_person answers. Your work goes on either way.`,
+      }),
+      ...(asPrompt && { prompt: asPrompt.text }),
+    };
   }
 
   /** Every tool the agent can call now: its context tools, seven's built-ins, and the enabled tools it built. */

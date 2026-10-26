@@ -120,6 +120,7 @@ export class State {
     this.db.exec(SCHEMA);
     // A database from before these columns: add them.
     this.addColumn("inbox", "subject", "TEXT");
+    this.addColumn("inbox", "as_prompt", "INTEGER NOT NULL DEFAULT 0");
     this.addColumn("tools", "libs", "TEXT");
     this.addColumn("tools", "bundle", "TEXT");
   }
@@ -204,12 +205,25 @@ export class State {
 
   // ── inbox ─────────────────────────────────────────────────────────────────
 
-  addInbox(turn: number, from: InboxMessage["from"], text: string, subject?: string): InboxMessage {
+  addInbox(
+    turn: number,
+    from: InboxMessage["from"],
+    text: string,
+    opts: { subject?: string; asPrompt?: boolean } = {},
+  ): InboxMessage {
     const at = now();
     const r = this.db
-      .prepare("INSERT INTO inbox (at, turn, sender, text, subject) VALUES (?, ?, ?, ?, ?)")
-      .run(at, turn, from, text, subject ?? null);
-    return { id: Number(r.lastInsertRowid), at, turn, from, text, ...(subject !== undefined && { subject }) };
+      .prepare("INSERT INTO inbox (at, turn, sender, text, subject, as_prompt) VALUES (?, ?, ?, ?, ?, ?)")
+      .run(at, turn, from, text, opts.subject ?? null, opts.asPrompt ? 1 : 0);
+    return {
+      id: Number(r.lastInsertRowid),
+      at,
+      turn,
+      from,
+      text,
+      ...(opts.subject !== undefined && { subject: opts.subject }),
+      ...(opts.asPrompt && { asPrompt: true }),
+    };
   }
 
   /** Newest first. */
@@ -328,6 +342,7 @@ function toInbox(r: unknown): InboxMessage {
     from: x.sender as InboxMessage["from"],
     text: String(x.text),
     ...(x.subject !== null && x.subject !== undefined && { subject: String(x.subject) }),
+    ...(Number(x.as_prompt) === 1 && { asPrompt: true }),
     ...(x.delivered_turn !== null && { deliveredTurn: Number(x.delivered_turn) }),
   };
 }

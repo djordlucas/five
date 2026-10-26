@@ -215,7 +215,9 @@ export function createApi(opts: ApiOptions): http.Server {
   route("POST", "/api/v1/inbox", ({ body }): InboxMessage => {
     const t = text(body, "text").trim();
     if (t.length > MAX_MESSAGE_CHARS) throw new HttpError(400, `a message is at most ${MAX_MESSAGE_CHARS} characters`);
-    return loop.receive(t);
+    const asPrompt = (body as { asPrompt?: unknown } | undefined)?.asPrompt;
+    if (asPrompt !== undefined && typeof asPrompt !== "boolean") throw new HttpError(400, "asPrompt must be a boolean");
+    return loop.receive(t, asPrompt === true);
   });
 
   // ── events ──────────────────────────────────────────────────────────────

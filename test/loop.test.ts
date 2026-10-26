@@ -1056,3 +1056,40 @@ test("the Ollama client reads a streamed reply as it arrives", async () => {
     server.close();
   }
 });
+
+test("a message sent as the prompt becomes the next turn's prompt; others still go before it", async () => {
+  const { five, model, cfg } = make([{ content: "a" }, { content: "b" }, { content: "c" }]);
+  const server = createApi({ five, cfg, log: (await import("../src/log.ts")).noopLogger });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}/api/v1`;
+  const post = (body: unknown) =>
+    fetch(`${base}/inbox`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  try {
+    assert.equal((await post({ text: "x", asPrompt: "yes" })).status, 400);
+    await post({ text: "By the way." });
+    const sent = (await (await post({ text: "Summarise your notes.", asPrompt: true })).json()) as InboxMessage;
+    assert.equal(sent.asPrompt, true);
+    await turn(five);
+    const opening = model.requests[0]?.at(-1)?.content as string;
+    assert.match(opening, /^\[The person wrote to you, during turn 0\] By the way\./);
+    assert.ok(opening.endsWith("\n\nSummarise your notes."), opening);
+    assert.ok(!opening.includes(SEED_PROMPT));
+    // It stays the prompt, as any next prompt does, until the agent sets another.
+    await turn(five);
+    assert.equal(model.requests[1]?.at(-1)?.content, "Summarise your notes.");
+    const page = (await (await fetch(`${base}/inbox`)).json()) as InboxPage;
+    assert.deepEqual(
+      page.messages.map((m) => [m.text, m.asPrompt ?? false, m.deliveredTurn]),
+      [
+        ["Summarise your notes.", true, 1],
+        ["By the way.", false, 1],
+      ],
+    );
+  } finally {
+    server.close();
+  }
+});
