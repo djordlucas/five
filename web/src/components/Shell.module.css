@@ -142,8 +142,11 @@
   overflow-y: auto;
 }
 
+/* A page's contents, in one centered column. */
 .content {
   min-width: 0;
+  max-width: calc(1200px + 2 * var(--space-6));
+  margin: 0 auto;
   padding: var(--space-3) var(--space-6) var(--space-6);
 }
 
