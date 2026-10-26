@@ -1093,3 +1093,57 @@ test("a message sent as the prompt becomes the next turn's prompt; others still 
     server.close();
   }
 });
+
+test("read_inbox shows both sides, reads a message sent during the turn, and the self block counts the unread", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "five-test-"));
+  const cfg = loadConfig({
+    FIVE_WORKSPACE: dir,
+    FIVE_TURN_DELAY_MS: "0",
+    FIVE_IDLE_TURNS: "0",
+    FIVE_FOLD_REPLIES: "off",
+  });
+  const requests: Message[][] = [];
+  let five: Five | undefined;
+  const call = (name: string, args: Record<string, unknown> = {}) => ({
+    message: {
+      role: "assistant" as const,
+      content: null,
+      tool_calls: [
+        { id: `c${requests.length}`, type: "function" as const, function: { name, arguments: JSON.stringify(args) } },
+      ],
+    },
+  });
+  const replies = [
+    () => call("message_person", { subject: "Hello", text: "Starting." }),
+    () => {
+      five?.loop.receive("Look at the news instead.");
+      return call("memory_read");
+    },
+    () => call("read_inbox"),
+    () => ({ message: { role: "assistant" as const, content: "ok" } }),
+    () => ({ message: { role: "assistant" as const, content: "ok" } }),
+  ];
+  five = createFive(cfg, {
+    async complete(req) {
+      requests.push(structuredClone(req.messages));
+      return (
+        replies[requests.length - 1] ??
+        replies[4] ??
+        (() => ({ message: { role: "assistant" as const, content: "" } }))
+      )();
+    },
+  });
+  open.push(five);
+  await turn(five);
+  const self = (i: number) => requests[i]?.at(-1)?.content as string;
+  assert.match(self(2), /1 from them, 1 unread: read_inbox shows it/);
+  const result = requests[3]?.findLast((m) => m.role === "tool")?.content as string;
+  assert.match(
+    result,
+    /you → the person: Hello — Starting\.[\s\S]*the person → you \(new\): Look at the news instead\./,
+  );
+  assert.doesNotMatch(self(3), /unread/);
+  // Read once, it is not put before the next prompt again.
+  await turn(five);
+  assert.equal(requests[4]?.at(-2)?.content, SEED_PROMPT);
+});

@@ -33,7 +33,7 @@ export const SELF_NOTE = "self";
 /** Where long results of runs are kept, in the workspace. */
 export const RESULTS_DIR = "results";
 /** Tools that only read, message or end the turn: a turn that calls nothing else did no work. */
-const NO_WORK = new Set(["read_context", "memory_read", "set_next_prompt", "end_turn", "message_person"]);
+const NO_WORK = new Set(["read_context", "memory_read", "set_next_prompt", "end_turn", "message_person", "read_inbox"]);
 /** A tool result longer than this is cut, whatever the settings. */
 const MAX_RESULT_CHARS = 16_000;
 
@@ -443,7 +443,7 @@ export class Supervisor {
       ...(goal ? [`Your goal: ${clip(goal, 240)}`] : []),
       `Working memory — this context: ${used === null ? "not measured yet" : `${tokens(used)} of ${tokens(contextTokens)} tokens at the last call (${share(used, contextTokens)}%)`}, ${ctx.messages.length} messages.`,
       `Long-term memory: ${notes} note${notes === 1 ? "" : "s"} in ${MEMORY_DIR}/. Tools you built: ${tools.length ? clip(tools.join(", "), 300) : "none yet"}. Libraries: ${libraries.length ? clip(libraries.join(", "), 200) : "none yet"}.`,
-      `Inbox: ${inbox.sent} message${inbox.sent === 1 ? "" : "s"} sent to the person${inbox.lastSentTurn === null ? "" : `, the last on turn ${inbox.lastSentTurn}`}; ${inbox.received} from them.`,
+      `Inbox: ${inbox.sent} message${inbox.sent === 1 ? "" : "s"} sent to the person${inbox.lastSentTurn === null ? "" : `, the last on turn ${inbox.lastSentTurn}`}; ${inbox.received} from them${inbox.unread ? `, ${inbox.unread} unread: read_inbox shows ${inbox.unread === 1 ? "it" : "them"}` : ""}. read_inbox shows what was said.`,
       "",
       `## Your self note (${MEMORY_DIR}/${SELF_NOTE}.md)`,
       "",

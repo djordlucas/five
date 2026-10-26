@@ -431,6 +431,36 @@ export class Loop {
   }
 
   /**
+   * The inbox for read_inbox: the latest messages, oldest first. The person's
+   * unread ones count as delivered now, so they do not come again before the
+   * next prompt — but for one sent as the prompt, which still becomes it.
+   */
+  private readInbox(last: number): string {
+    const { state } = this.o;
+    const messages = state.listInbox(last).reverse();
+    if (!messages.length) return "The inbox is empty: neither you nor the person has written yet.";
+    const fresh = messages.filter((m) => m.from === "person" && m.deliveredTurn === undefined && !m.asPrompt);
+    state.markDelivered(
+      fresh.map((m) => m.id),
+      this.ctx.turn,
+    );
+    const lines = messages.map((m) => {
+      const when = `turn ${m.turn}, ${m.at.slice(0, 16).replace("T", " ")} UTC`;
+      if (m.from === "five") return `[${when}] you → the person: ${m.subject ? `${m.subject} — ` : ""}${m.text}`;
+      const tag =
+        m.asPrompt && m.deliveredTurn === undefined
+          ? " (new: it will be your next turn's prompt)"
+          : fresh.includes(m)
+            ? " (new)"
+            : "";
+      return `[${when}] the person → you${tag}: ${m.text}`;
+    });
+    const total = state.inboxCounts();
+    const older = total.sent + total.received - messages.length;
+    return `${lines.join("\n\n")}${older > 0 ? `\n\n(${older} older; read_inbox with last shows more.)` : ""}`;
+  }
+
+  /**
    * The person's messages not yet delivered: a note this turn's prompt starts
    * with, and the latest sent as the prompt, which becomes this turn's prompt.
    */
@@ -536,6 +566,7 @@ export class Loop {
       endTurn,
       selfBlock: () => this.selfBlock(),
       sendMessage: (subject, text) => this.supervisor.sendMessage(this.ctx.turn, subject, text),
+      readInbox: (last) => this.readInbox(last),
       checkNext: (text) => this.supervisor.checkNext(text, this.turnPrompt),
       checkSelfNote: (length) => this.supervisor.checkSelfNote(length),
     };
