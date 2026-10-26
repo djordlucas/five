@@ -122,7 +122,6 @@ function Controls() {
   ];
   return (
     <header class={styles.bar}>
-      <Gauge value={used} max={s.contextTokens} warnAt={s.contextTokens * 0.8} label="Context window used" />
       <div class={styles.title}>
         <h2>
           Turn {loop.turn} · {s.model}
@@ -131,6 +130,9 @@ function Controls() {
         <span class="muted">{facts.join(' · ')}</span>
       </div>
       <div class={styles.actions}>
+        <a class={styles.gauge} href="/workspace/context" title="Open the context">
+          <Gauge value={used} max={s.contextTokens} warnAt={s.contextTokens * 0.8} label="Context window used" />
+        </a>
         <ShownTurns />
         {loop.retryAt && <Badge state="warn">retry at {clock(loop.retryAt)}</Badge>}
         {loop.running ? (
