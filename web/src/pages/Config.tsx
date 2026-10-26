@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'preact/hooks';
 import { del, get, message, put, type SupervisorField, type SupervisorSettings, type SupervisorView } from '../api/client';
 import { status } from '../live';
-import styles from './Supervisor.module.css';
+import styles from './Config.module.css';
 
 type Draft = Partial<Record<keyof SupervisorSettings, number | boolean>>;
 
@@ -11,7 +11,7 @@ type Draft = Partial<Record<keyof SupervisorSettings, number | boolean>>;
  * next turn — and is kept across restarts; the defaults come from the
  * environment.
  */
-export function Supervisor() {
+export function Config() {
   const [view, setView] = useState<SupervisorView | null>(null);
   const [draft, setDraft] = useState<Draft>({});
   const [error, setError] = useState<string | null>(null);

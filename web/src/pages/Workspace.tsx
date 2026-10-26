@@ -48,6 +48,25 @@ export function Workspace() {
   );
 }
 
+/** The tabs over Workspace's views: its files, the agent's context, the tools it built. */
+export function InWorkspace({ children }: { children: ComponentChildren }) {
+  const { path } = useLocation();
+  const tab = path.startsWith('/workspace/context') ? 'context' : path.startsWith('/workspace/tools') ? 'tools' : 'files';
+  const count = status.value?.tools;
+  return (
+    <div class={styles.section}>
+      <Segments
+        items={[
+          { href: '/workspace', label: 'Files', current: tab === 'files' },
+          { href: '/workspace/context', label: 'Context', current: tab === 'context' },
+          { href: '/workspace/tools', label: 'Tools', current: tab === 'tools', count },
+        ]}
+      />
+      {children}
+    </div>
+  );
+}
+
 // Files
 
 function Files({ dir, file, changed, onChanged }: { dir: string; file?: string; changed: number; onChanged: () => void }) {

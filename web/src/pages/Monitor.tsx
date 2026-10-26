@@ -5,16 +5,16 @@ import { Badge, ui } from '../components/ui';
 import { clock, duration, pretty } from '../format';
 import { status } from '../live';
 import split from './Workspace.module.css';
-import styles from './Processes.module.css';
+import styles from './Monitor.module.css';
 
 const live = (p: ProcessInfo) => p.state === 'installing' || p.state === 'running';
 
 /**
- * Every child process five started since it started — each run_js, each call
+ * What five has running. For now its processes: every child process five started since it started — each run_js, each call
  * of a tool the agent built, each define_tool trial, each background run —
  * newest first, live ones to follow and kill.
  */
-export function Processes() {
+export function Monitor() {
   const { query } = useLocation();
   const open = query.id || undefined;
   const [list, setList] = useState<ProcessInfo[] | null>(null);
@@ -44,7 +44,7 @@ export function Processes() {
         <ul class={split.entries}>
           {list?.map((p) => (
             <li key={p.id}>
-              <a href={`/processes?id=${p.id}`} class={split.entry} aria-current={p.id === open ? 'page' : undefined}>
+              <a href={`/monitor?id=${p.id}`} class={split.entry} aria-current={p.id === open ? 'page' : undefined}>
                 <span class={split.kind}>
                   <Badge state={p.state} />
                 </span>
@@ -115,7 +115,7 @@ function Detail({ id, tick }: { id: string; tick: unknown }) {
   return (
     <article class={`card ${split.detail}`}>
       <header class={split.head}>
-        <a class={split.back} href="/processes" aria-label="All processes">
+        <a class={split.back} href="/monitor" aria-label="All processes">
           ‹
         </a>
         <div class={split.title}>

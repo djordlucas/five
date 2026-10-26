@@ -26,7 +26,7 @@ export function Tools({ name }: { name?: string }) {
       <ul class={styles.list}>
         {tools?.map((t) => (
           <li key={t.name}>
-            <a class={styles.item} href={`/tools/${t.name}`}>
+            <a class={styles.item} href={`/workspace/tools/${t.name}`}>
               <span class={styles.name}>{t.name}</span>
               <span class="muted">
                 r{t.revision} · {ago(t.updatedAt)}
@@ -49,7 +49,7 @@ function Tool({ name }: { name: string }) {
   }, [name]);
   return (
     <div class={styles.page}>
-      <a href="/tools">← All tools</a>
+      <a href="/workspace/tools">← All tools</a>
       {error && <p class="error">{error}</p>}
       {tool && (
         <>

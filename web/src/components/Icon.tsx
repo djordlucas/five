@@ -2,12 +2,10 @@ import type { IconName } from '../sections';
 
 // 24×24 stroke icons drawn with currentColor, so they follow the theme.
 const paths: Record<IconName, string> = {
-  loop: 'M4 12a8 8 0 0 1 14-5.3M20 4v4h-4M20 12a8 8 0 0 1-14 5.3M4 20v-4h4',
-  context: 'M6 3h12v18H6zM9 7h6M9 11h6M9 15h4',
+  activity: 'M4 12a8 8 0 0 1 14-5.3M20 4v4h-4M20 12a8 8 0 0 1-14 5.3M4 20v-4h4',
   inbox: 'M4 5h16v14H4zM4 13h5l1 2h4l1-2h5',
-  supervisor: 'M4 7h10M18 7h2M4 17h4M12 17h8M16 5v4M10 15v4',
-  tool: 'M14 6a4 4 0 0 0 5 5l-9 9-3-3 9-9a4 4 0 0 0-2-2z',
-  process: 'M4 5h16v14H4zM8 10l3 2-3 2M13 15h3',
+  config: 'M4 7h10M18 7h2M4 17h4M12 17h8M16 5v4M10 15v4',
+  monitor: 'M4 5h16v14H4zM8 10l3 2-3 2M13 15h3',
   folder: 'M3 6a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z',
 };
 

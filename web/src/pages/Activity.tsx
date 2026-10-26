@@ -4,7 +4,7 @@ import { Badge, Meter } from '../components/ui';
 import { clock, duration, oneLine, prettyArgs } from '../format';
 import { events, loadMoreTurns, refresh, status } from '../live';
 import { Markdown } from '../markdown';
-import styles from './Loop.module.css';
+import styles from './Activity.module.css';
 
 type Of<T extends Event['type']> = Extract<Event, { type: T }>;
 
@@ -35,7 +35,7 @@ function group(list: Event[]): Turn[] {
 }
 
 /** The loop as it runs: its controls, then every turn, newest at the bottom, followed as it grows. */
-export function Loop() {
+export function Activity() {
   const turns = useMemo(() => group(events.value), [events.value]);
   const bottom = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
@@ -168,7 +168,7 @@ function TurnView({ t }: { t: Turn }) {
           case 'supervisor':
             return (
               <p key={e.seq} class={styles.line}>
-                ⚙ <a href="/supervisor">supervisor</a>: {e.change}
+                ⚙ <a href="/config">config</a>: {e.change}
               </p>
             );
           case 'loop':
