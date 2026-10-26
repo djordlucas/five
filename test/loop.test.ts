@@ -13,10 +13,14 @@ import type {
   EventsPage,
   InboxMessage,
   InboxPage,
+  LibraryDetail,
+  LibraryInfo,
+  LiveWork,
   ProcessDetail,
   ProcessInfo,
   Status,
   SupervisorView,
+  ToolDetail,
   WorkspaceDir,
   WorkspaceEntry,
 } from "../src/api/types.ts";
@@ -31,15 +35,21 @@ type Reply = { content?: string; calls?: [string, Record<string, unknown>][]; to
  * its messages without five's self block, which ends each one, and the block
  * ("" when it is off).
  */
-function scripted(replies: Reply[]): ChatModel & { requests: Message[][]; selves: string[] } {
+function scripted(
+  replies: Reply[],
+): ChatModel & { requests: Message[][]; selves: string[]; images: (string | undefined)[][] } {
   const requests: Message[][] = [];
   const selves: string[] = [];
+  const images: (string | undefined)[][] = [];
   let n = 0;
   return {
     requests,
     selves,
+    images,
     async complete(req: CompletionRequest): Promise<Completion> {
       const messages = structuredClone(req.messages);
+      // What a model that sees would get: each attached image's bytes, as base64.
+      images.push(messages.flatMap((m) => ("images" in m && m.images ? m.images.map((p) => req.image?.(p)) : [])));
       const last = messages.at(-1);
       const self = last?.role === "user" && last.content.startsWith("## You, now") ? messages.pop() : undefined;
       selves.push(self?.content ?? "");
@@ -677,9 +687,12 @@ test("every call ends with five's self block, with the self note; the system pro
 });
 
 test("the inbox: one message a turn to the person, and their reply put before the next prompt", async () => {
-  const send = (text: string): [string, Record<string, unknown>] => ["message_person", { text }];
+  const send = (text: string): [string, Record<string, unknown>] => [
+    "message_person",
+    { subject: `About ${text}`, text },
+  ];
   const { five, cfg, model } = make([
-    { calls: [send("Found a map."), send("And another.")] },
+    { calls: [["message_person", { subject: " ", text: "No subject." }], send("Found a map."), send("And another.")] },
     { content: "a" },
     { content: "b" },
   ]);
@@ -690,13 +703,14 @@ test("the inbox: one message a turn to the person, and their reply put before th
   try {
     await turn(five);
     const results = model.requests[1]?.filter((m) => m.role === "tool").map((m) => m.content) ?? [];
-    assert.match(results[0] ?? "", /^sent\./);
-    assert.match(results[1] ?? "", /one a turn/);
+    assert.match(results[0] ?? "", /^error: give the message a subject/);
+    assert.match(results[1] ?? "", /^sent\./);
+    assert.match(results[2] ?? "", /one a turn/);
     const status = (await (await fetch(`${base}/status`)).json()) as Status;
     let page = (await (await fetch(`${base}/inbox`)).json()) as InboxPage;
     assert.deepEqual(
-      page.messages.map((m) => [m.from, m.text, m.turn]),
-      [["five", "Found a map.", 1]],
+      page.messages.map((m) => [m.from, m.subject, m.text, m.turn]),
+      [["five", "About Found a map.", "Found a map.", 1]],
     );
     assert.equal(status.inboxLast, page.messages[0]?.id);
 
@@ -727,7 +741,10 @@ test("the inbox: one message a turn to the person, and their reply put before th
 });
 
 test("the supervisor's settings change live through the API, outlive a restart, and reset", async () => {
-  const send = (text: string): [string, Record<string, unknown>] => ["message_person", { text }];
+  const send = (text: string): [string, Record<string, unknown>] => [
+    "message_person",
+    { subject: `About ${text}`, text },
+  ];
   const { five, cfg, model } = make([{ calls: [send("One."), send("Two."), send("Three.")] }, { content: "a" }]);
   const server = createApi({ five, cfg, log: (await import("../src/log.ts")).noopLogger });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
@@ -778,4 +795,301 @@ test("the supervisor's settings change live through the API, outlive a restart, 
   again.loop.supervisor.resetSettings();
   assert.deepEqual(again.loop.supervisor.view().changed, []);
   assert.equal(again.loop.supervisor.settings.selfBlock, true);
+});
+
+/** A two-page PDF: text on page one, only a drawn box on page two. */
+function twoPagePdf(): Buffer {
+  const stream = (s: string) => `<< /Length ${s.length} >>\nstream\n${s}\nendstream`;
+  const objs = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 4 0 R /Resources << /Font << /F1 7 0 R >> >> >>",
+    stream("BT /F1 18 Tf 20 100 Td (Hello from page one) Tj ET"),
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 6 0 R >>",
+    stream("0 0 1 rg 50 50 200 100 re f"),
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+  ];
+  let out = "%PDF-1.4\n";
+  const offsets: number[] = [];
+  objs.forEach((o, i) => {
+    offsets.push(out.length);
+    out += `${i + 1} 0 obj\n${o}\nendobj\n`;
+  });
+  const xref = out.length;
+  out += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n`;
+  out += offsets.map((o) => `${String(o).padStart(10, "0")} 00000 n \n`).join("");
+  out += `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return Buffer.from(out, "latin1");
+}
+
+test("view_image shrinks an image and shows it after the step's results; read_pdf reads text and renders the rest", async () => {
+  const { createCanvas } = await import("@napi-rs/canvas");
+  const { five, model, cfg } = make([
+    {
+      calls: [
+        ["view_image", { path: "photo.png" }],
+        ["view_image", { path: "notes.txt" }],
+        ["read_pdf", { path: "doc.pdf" }],
+      ],
+    },
+    { content: "a red picture and a document" },
+  ]);
+  const canvas = createCanvas(2000, 1000);
+  const g = canvas.getContext("2d");
+  g.fillStyle = "#c00";
+  g.fillRect(0, 0, 2000, 1000);
+  fs.writeFileSync(path.join(cfg.workspace, "photo.png"), await canvas.encode("png"));
+  fs.writeFileSync(path.join(cfg.workspace, "notes.txt"), "not an image");
+  fs.writeFileSync(path.join(cfg.workspace, "doc.pdf"), twoPagePdf());
+
+  await turn(five);
+  const sent = model.requests[1] ?? [];
+  const results = sent.filter((m) => m.role === "tool").map((m) => m.content);
+  assert.match(results[0] ?? "", /^attached results\/images\/photo-\w+\.jpg \(1024×512, shrunk from 2000×1000\)/);
+  assert.match(results[1] ?? "", /^error: .*not an image/);
+  assert.match(results[2] ?? "", /^doc\.pdf: 2 pages; pages 1–2 follow\./);
+  assert.match(results[2] ?? "", /--- page 1 ---\nHello from page one/);
+  assert.match(results[2] ?? "", /--- page 2 --- no text .*rendered as results\/images\/doc-p2\.png/);
+  assert.ok(fs.existsSync(path.join(cfg.workspace, "results/images/doc-p2.png")));
+
+  // After the tool results, a user message with the image; the call sends its bytes.
+  const shown = sent.at(-1);
+  assert.equal(shown?.role, "user");
+  const paths = shown && "images" in shown ? shown.images : undefined;
+  assert.equal(paths?.length, 1);
+  assert.match(paths?.[0] ?? "", /^results\/images\/photo-\w+\.jpg$/);
+  const data = model.images[1]?.[0];
+  assert.ok(
+    data &&
+      Buffer.from(data, "base64")
+        .subarray(0, 2)
+        .equals(Buffer.from([0xff, 0xd8])),
+    "a JPEG",
+  );
+});
+
+test("libraries: bundled into a tool at their revision, with the tools a change leaves behind, and rebuild_tool", async () => {
+  const lib = (code: string, extra: Record<string, unknown> = {}): [string, Record<string, unknown>] => [
+    "define_library",
+    { name: "greet", description: "hello(name)", code, ...extra },
+  ];
+  const { five, model, cfg } = make([
+    {
+      calls: [
+        lib("export const hello = (n: string) => `hello ${n}`;", {
+          test_code: 'import { hello } from "lib:greet"; export default hello("test");',
+        }),
+        [
+          "define_tool",
+          {
+            name: "say",
+            description: "Greets.",
+            parameters: { type: "object", properties: { who: { type: "string" } }, required: ["who"] },
+            code: 'import { hello } from "lib:greet";\nexport default async ({ who }) => hello(who);',
+            test_args: { who: "trial" },
+          },
+        ],
+        ["run_js", { code: 'import { hello } from "lib:nope"; export default 1;' }],
+      ],
+    },
+    { calls: [["say", { who: "ada" }]] },
+    {
+      calls: [
+        lib("export const hello = (n: string) => `HI ${n}`;", {
+          test_code: 'import { hello } from "lib:greet"; throw new Error("no");',
+        }),
+        lib("export const hello = (n: string) => `HI ${n}`;"),
+        ["say", { who: "bo" }],
+        ["read_tool", { name: "say" }],
+        ["delete_library", { name: "greet" }],
+        ["rebuild_tool", { name: "say", test_args: { who: "x" } }],
+      ],
+    },
+    {
+      calls: [
+        ["say", { who: "cy" }],
+        ["read_library", {}],
+      ],
+    },
+    { content: "done" },
+  ]);
+  await turn(five);
+  // The results of the step before request i: the tool messages after its last assistant message.
+  const results = (i: number) => {
+    const sent = model.requests[i] ?? [];
+    const last = sent.findLastIndex((m) => m.role === "assistant");
+    return sent.slice(last + 1).flatMap((m) => (m.role === "tool" ? [m.content] : []));
+  };
+
+  const [defined, tool, missing] = results(1);
+  assert.match(defined ?? "", /^saved lib:greet \(revision 1\)[\s\S]*No tool is built on it yet[\s\S]*hello test/);
+  assert.match(tool ?? "", /^saved say \(revision 1\)[\s\S]*Built on lib:greet r1/);
+  assert.match(missing ?? "", /^error: .*no library "nope"/);
+  assert.match(results(2)[0] ?? "", /hello ada/);
+
+  const [failed, revised, stillOld, read, refused, rebuilt] = results(3);
+  assert.match(failed ?? "", /^not saved: the test failed/);
+  assert.match(
+    revised ?? "",
+    /^saved lib:greet \(revision 2\)[\s\S]*say \(r1\)[\s\S]*say still runs an older revision: rebuild_tool/,
+  );
+  // The tool keeps the revision it was built on.
+  assert.match(stillOld ?? "", /hello bo/);
+  assert.match(read ?? "", /lib:greet r1: the library is at r2 now; rebuild_tool/);
+  assert.match(refused ?? "", /^error: lib:greet is in use by the tool say/);
+  assert.match(rebuilt ?? "", /^rebuilt say \(revision 2\) on lib:greet r2[\s\S]*HI x/);
+
+  // At the end of the turn: rebuilt on r2.
+  assert.deepEqual(five.store.get("say")?.meta.libs, [{ name: "greet", revision: 2 }]);
+  const [now, listed] = results(4);
+  assert.match(now ?? "", /HI cy/);
+  assert.match(listed ?? "", /^lib:greet r2 — hello\(name\) \(used by say\)/);
+
+  // The API: the library, who uses it, and each tool's libraries.
+  const server = createApi({ five, cfg, log: (await import("../src/log.ts")).noopLogger });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}/api/v1`;
+  try {
+    const list = (await (await fetch(`${base}/libraries`)).json()) as { libraries: LibraryInfo[] };
+    assert.deepEqual(list.libraries, [
+      {
+        name: "greet",
+        description: "hello(name)",
+        revision: 2,
+        updatedAt: list.libraries[0]?.updatedAt,
+        usedBy: [{ tool: "say", revision: 2 }],
+      },
+    ]);
+    const one = (await (await fetch(`${base}/libraries/greet`)).json()) as LibraryDetail;
+    assert.match(one.source, /HI/);
+    assert.deepEqual(one.importedBy, []);
+    assert.equal((await fetch(`${base}/libraries/nope`)).status, 404);
+    const tool = (await (await fetch(`${base}/tools/say`)).json()) as ToolDetail;
+    assert.deepEqual(tool.libs, [{ name: "greet", revision: 2, current: 2 }]);
+    assert.equal(((await (await fetch(`${base}/status`)).json()) as Status).libraries, 1);
+  } finally {
+    server.close();
+  }
+});
+
+test("the status shows the step in progress: the model's reply as it streams, then each tool as it runs", async () => {
+  const seen: (LiveWork | undefined)[] = [];
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "five-test-"));
+  const cfg = loadConfig({
+    FIVE_WORKSPACE: dir,
+    FIVE_TURN_DELAY_MS: "0",
+    FIVE_IDLE_TURNS: "0",
+    FIVE_FOLD_REPLIES: "off",
+  });
+  let n = 0;
+  let five: Five | undefined;
+  const model: ChatModel = {
+    async complete(req) {
+      req.onProgress?.({ thinking: "let me see", content: "I will" });
+      seen.push(five?.loop.status().live);
+      if (n++ > 0) return { message: { role: "assistant", content: "done" } };
+      return {
+        message: {
+          role: "assistant",
+          content: null,
+          tool_calls: [
+            {
+              id: "c1",
+              type: "function",
+              function: { name: "run_js", arguments: '{"code":"export default (seen => 1)()"}' },
+            },
+          ],
+        },
+      };
+    },
+  };
+  five = createFive(cfg, model);
+  open.push(five);
+  const during: (LiveWork | undefined)[] = [];
+  const watch = setInterval(() => during.push(five?.loop.status().live), 1);
+  await turn(five);
+  clearInterval(watch);
+  assert.equal(seen[0]?.phase, "model");
+  assert.equal(seen[0]?.step, 1);
+  assert.equal(seen[0]?.thinking, "let me see");
+  assert.equal(seen[0]?.content, "I will");
+  assert.ok(
+    during.some((l) => l?.phase === "tool" && l.tool === "run_js"),
+    "the tool showed while it ran",
+  );
+  assert.equal(five.loop.status().live, undefined);
+});
+
+test("the Ollama client reads a streamed reply as it arrives", async () => {
+  const http = await import("node:http");
+  const chunks = [
+    { message: { thinking: "Hm" } },
+    { message: { thinking: "m." } },
+    { message: { content: "Hel" } },
+    { message: { content: "lo" }, done: true, done_reason: "stop", prompt_eval_count: 7, eval_count: 3 },
+  ];
+  const server = http.createServer(async (req, res) => {
+    if (req.url === "/api/show") return res.end("{}");
+    res.writeHead(200, { "content-type": "application/x-ndjson" });
+    for (const c of chunks) {
+      res.write(`${JSON.stringify(c)}\n`);
+      await new Promise((r) => setTimeout(r, 15));
+    }
+    res.end();
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  try {
+    const { Ollama } = await import("../src/llm/ollama.ts");
+    const port = (server.address() as { port: number }).port;
+    const client = new Ollama({ model: "m", endpoint: `http://127.0.0.1:${port}`, contextTokens: 1000 });
+    const progress: string[] = [];
+    const out = await client.complete({
+      messages: [{ role: "user", content: "hi" }],
+      onProgress: (p) => progress.push(`${p.thinking}|${p.content}`),
+    });
+    assert.equal(out.message.content, "Hello");
+    assert.equal(out.message.thinking, "Hmm.");
+    assert.equal(out.usage?.prompt_tokens, 7);
+    assert.ok(progress.length >= 3, `progress came in pieces: ${progress.join(", ")}`);
+    assert.equal(progress.at(-1), "Hmm.|Hello");
+  } finally {
+    server.close();
+  }
+});
+
+test("a message sent as the prompt becomes the next turn's prompt; others still go before it", async () => {
+  const { five, model, cfg } = make([{ content: "a" }, { content: "b" }, { content: "c" }]);
+  const server = createApi({ five, cfg, log: (await import("../src/log.ts")).noopLogger });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}/api/v1`;
+  const post = (body: unknown) =>
+    fetch(`${base}/inbox`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  try {
+    assert.equal((await post({ text: "x", asPrompt: "yes" })).status, 400);
+    await post({ text: "By the way." });
+    const sent = (await (await post({ text: "Summarise your notes.", asPrompt: true })).json()) as InboxMessage;
+    assert.equal(sent.asPrompt, true);
+    await turn(five);
+    const opening = model.requests[0]?.at(-1)?.content as string;
+    assert.match(opening, /^\[The person wrote to you, during turn 0\] By the way\./);
+    assert.ok(opening.endsWith("\n\nSummarise your notes."), opening);
+    assert.ok(!opening.includes(SEED_PROMPT));
+    // It stays the prompt, as any next prompt does, until the agent sets another.
+    await turn(five);
+    assert.equal(model.requests[1]?.at(-1)?.content, "Summarise your notes.");
+    const page = (await (await fetch(`${base}/inbox`)).json()) as InboxPage;
+    assert.deepEqual(
+      page.messages.map((m) => [m.text, m.asPrompt ?? false, m.deliveredTurn]),
+      [
+        ["Summarise your notes.", true, 1],
+        ["By the way.", false, 1],
+      ],
+    );
+  } finally {
+    server.close();
+  }
 });

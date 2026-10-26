@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'preact/hooks';
 import { del, get, message, put, type SupervisorField, type SupervisorSettings, type SupervisorView } from '../api/client';
 import { status } from '../live';
-import styles from './Supervisor.module.css';
+import { Icon } from '../components/Icon';
+import type { IconName } from '../sections';
+import styles from './Config.module.css';
 
 type Draft = Partial<Record<keyof SupervisorSettings, number | boolean>>;
 
@@ -11,7 +13,7 @@ type Draft = Partial<Record<keyof SupervisorSettings, number | boolean>>;
  * next turn — and is kept across restarts; the defaults come from the
  * environment.
  */
-export function Supervisor() {
+export function Config() {
   const [view, setView] = useState<SupervisorView | null>(null);
   const [draft, setDraft] = useState<Draft>({});
   const [error, setError] = useState<string | null>(null);
@@ -56,7 +58,10 @@ export function Supervisor() {
 
       {groups.map((g) => (
         <section key={g} class={`card ${styles.group}`} aria-label={g}>
-          <h2>{g}</h2>
+          <h2>
+            <Icon name={groupIcons[g] ?? 'config'} size={18} />
+            {g}
+          </h2>
           {view.fields
             .filter((f) => f.group === g)
             .map((f) => (
@@ -101,6 +106,16 @@ export function Supervisor() {
     </div>
   );
 }
+
+/** An icon for each group of settings. */
+const groupIcons: Record<string, IconName> = {
+  'Working memory': 'layers',
+  'Turn endings': 'flag',
+  'Idle turns': 'clock',
+  'Next prompt': 'next',
+  'Self and inbox': 'person',
+  Results: 'file',
+};
 
 function Row(props: {
   f: SupervisorField;

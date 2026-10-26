@@ -85,13 +85,23 @@ CREATE TABLE IF NOT EXISTS runs (
   started_at TEXT NOT NULL,
   checked INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS libs (
+  name TEXT PRIMARY KEY,
+  description TEXT NOT NULL,
+  deps TEXT NOT NULL,
+  source TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS inbox (
   id INTEGER PRIMARY KEY,
   at TEXT NOT NULL,
   turn INTEGER NOT NULL,
   sender TEXT NOT NULL CHECK (sender IN ('five', 'person')),
   text TEXT NOT NULL,
-  delivered_turn INTEGER
+  delivered_turn INTEGER,
+  subject TEXT
 );
 INSERT OR IGNORE INTO meta (key, value) VALUES ('run_seq', '0');
 `;
@@ -108,6 +118,16 @@ export class State {
     this.db = new DatabaseSync(this.path);
     this.db.exec("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;");
     this.db.exec(SCHEMA);
+    // A database from before these columns: add them.
+    this.addColumn("inbox", "subject", "TEXT");
+    this.addColumn("inbox", "as_prompt", "INTEGER NOT NULL DEFAULT 0");
+    this.addColumn("tools", "libs", "TEXT");
+    this.addColumn("tools", "bundle", "TEXT");
+  }
+
+  private addColumn(table: string, column: string, type: string): void {
+    const cols = this.db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+    if (!cols.some((c) => c.name === column)) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
   }
 
   close(): void {
@@ -185,12 +205,25 @@ export class State {
 
   // ── inbox ─────────────────────────────────────────────────────────────────
 
-  addInbox(turn: number, from: InboxMessage["from"], text: string): InboxMessage {
+  addInbox(
+    turn: number,
+    from: InboxMessage["from"],
+    text: string,
+    opts: { subject?: string; asPrompt?: boolean } = {},
+  ): InboxMessage {
     const at = now();
     const r = this.db
-      .prepare("INSERT INTO inbox (at, turn, sender, text) VALUES (?, ?, ?, ?)")
-      .run(at, turn, from, text);
-    return { id: Number(r.lastInsertRowid), at, turn, from, text };
+      .prepare("INSERT INTO inbox (at, turn, sender, text, subject, as_prompt) VALUES (?, ?, ?, ?, ?, ?)")
+      .run(at, turn, from, text, opts.subject ?? null, opts.asPrompt ? 1 : 0);
+    return {
+      id: Number(r.lastInsertRowid),
+      at,
+      turn,
+      from,
+      text,
+      ...(opts.subject !== undefined && { subject: opts.subject }),
+      ...(opts.asPrompt && { asPrompt: true }),
+    };
   }
 
   /** Newest first. */
@@ -308,6 +341,8 @@ function toInbox(r: unknown): InboxMessage {
     turn: Number(x.turn),
     from: x.sender as InboxMessage["from"],
     text: String(x.text),
+    ...(x.subject !== null && x.subject !== undefined && { subject: String(x.subject) }),
+    ...(Number(x.as_prompt) === 1 && { asPrompt: true }),
     ...(x.delivered_turn !== null && { deliveredTurn: Number(x.delivered_turn) }),
   };
 }

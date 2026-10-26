@@ -2,7 +2,12 @@
 // It imports nothing, so the browser build can compile it.
 
 export type Message =
-  | { role: "system" | "user"; content: string }
+  | {
+      role: "system" | "user";
+      content: string;
+      /** Workspace paths of images shown with this message (view_image); a model call sends their bytes. */
+      images?: string[];
+    }
   | { role: "assistant"; content: string | null; thinking?: string; tool_calls?: ToolCall[] }
   | { role: "tool"; tool_call_id: string; name: string; content: string };
 
@@ -47,7 +52,7 @@ export type EventBody =
   | { type: "turn_ended"; reason: TurnEnd; next: string; error?: string }
   | { type: "context"; by: "model" | "user" | "five"; change: string }
   /** A message in the inbox: five's to the person, or the person's to five. */
-  | { type: "inbox"; from: InboxMessage["from"]; text: string }
+  | { type: "inbox"; from: InboxMessage["from"]; subject?: string; text: string; asPrompt?: boolean }
   | { type: "loop"; state: "started" | "paused"; reason?: string }
   /** The supervisor's settings changed, from the API. */
   | { type: "supervisor"; change: string };
@@ -65,6 +70,22 @@ export interface LoopStatus {
   promptTokens: number | null;
   /** When the loop waits after a failed turn, until when. */
   retryAt: string | null;
+  /** What the turn is doing right now: the model writing its reply, or a tool running. */
+  live?: LiveWork;
+}
+
+/** The step in progress, for the UI to show it as it happens. */
+export interface LiveWork {
+  step: number;
+  /** "model": the model is writing; "tool": one of its calls runs. */
+  phase: "model" | "tool";
+  /** When this phase began. */
+  startedAt: string;
+  /** The tool running, in the "tool" phase. */
+  tool?: string;
+  /** The model's thinking and text so far (their ends, when long), in the "model" phase. */
+  thinking?: string;
+  content?: string;
 }
 
 export interface Status {
@@ -79,6 +100,8 @@ export interface Status {
   messages: number;
   /** Tools the agent built. */
   tools: number;
+  /** Libraries the agent wrote. */
+  libraries: number;
   /** The last event's seq: a client that has it is up to date. */
   lastSeq: number;
   /** The id of five's latest message to the person; 0 when none. */
@@ -92,9 +115,13 @@ export interface InboxMessage {
   /** The turn it was sent in; for the person's, the turn running or last ended then. */
   turn: number;
   from: "five" | "person";
+  /** What it is about, in a few words: five's always have one. */
+  subject?: string;
   text: string;
   /** For the person's: the turn it was put before, once delivered. */
   deliveredTurn?: number;
+  /** A person's message sent as the next turn's prompt, in place of the one the agent set. */
+  asPrompt?: boolean;
 }
 
 export interface InboxPage {
@@ -122,11 +149,31 @@ export interface ToolInfo {
   revision: number;
   updatedAt: string;
   disabled?: { at: string; reason: string };
+  /** The libraries bundled into it: the revision it was built on, and the library's now (absent when deleted). */
+  libs?: { name: string; revision: number; current?: number }[];
 }
 
 export interface ToolDetail extends ToolInfo {
   parameters: Record<string, unknown>;
   source: string;
+}
+
+/** A library: shared code tools import as "lib:<name>". */
+export interface LibraryInfo {
+  name: string;
+  description: string;
+  revision: number;
+  updatedAt: string;
+  /** The tools built on it, each at the revision bundled into it. */
+  usedBy: { tool: string; revision: number }[];
+}
+
+export interface LibraryDetail extends LibraryInfo {
+  source: string;
+  /** npm version ranges it asks for. */
+  deps: Record<string, string>;
+  /** Libraries that import it. */
+  importedBy: string[];
 }
 
 export interface ErrorBody {
@@ -239,6 +286,7 @@ export interface SupervisorSettings {
   selfNoteChars: number;
   messagesPerTurn: number;
   resultChars: number;
+  imageSide: number;
 }
 
 /** One setting, as the web UI shows it: a flag when its value is a boolean, else a whole number. */

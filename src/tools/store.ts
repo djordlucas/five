@@ -10,6 +10,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { SQLInputValue } from "node:sqlite";
 import type { State } from "../state.ts";
+import type { LibraryUse } from "./libs.ts";
 
 export interface ToolMeta {
   name: string;
@@ -28,11 +29,16 @@ export interface ToolMeta {
   timeoutMs?: number;
   /** Set while the tool is disabled: it is not offered to the model and calls to it are refused. */
   disabled?: { at: string; reason: string };
+  /** The libraries bundled into it, at the revision it was built on. */
+  libs?: LibraryUse[];
 }
 
 export interface StoredTool {
   meta: ToolMeta;
+  /** The source as the agent wrote it. */
   source: string;
+  /** What runs: the source with its libraries inlined, when it imports any. */
+  bundle?: string;
   /** Absolute path of this revision's source file, for the runner. */
   file: string;
 }
@@ -83,25 +89,37 @@ export class ToolStore {
     if (!row) return undefined;
     const meta = toMeta(row);
     const source = String(row.source);
-    return { meta, source, file: this.materialize(name, meta.revision, source) };
+    const bundle = row.bundle === null || row.bundle === undefined ? undefined : String(row.bundle);
+    return {
+      meta,
+      source,
+      ...(bundle !== undefined && { bundle }),
+      file: this.materialize(name, meta.revision, bundle ?? source),
+    };
   }
 
   /**
    * Create or replace a tool. Redefining keeps the run history and clears
    * `disabled`: a new revision is the fix for whatever disabled the old one.
    */
-  save(tool: { meta: Omit<ToolMeta, "createdAt" | "updatedAt" | "revision" | "disabled">; source: string }): ToolMeta {
+  save(tool: {
+    meta: Omit<ToolMeta, "createdAt" | "updatedAt" | "revision" | "disabled">;
+    source: string;
+    /** The source with its libraries inlined, when it imports any. */
+    bundle?: string;
+  }): ToolMeta {
     const { name } = tool.meta;
     if (!TOOL_NAME.test(name)) throw new Error(`invalid tool name "${name}": must match ${TOOL_NAME}`);
     const now = new Date().toISOString();
     const m = tool.meta;
     this.state.db
       .prepare(
-        `INSERT INTO tools (name, description, parameters, deps, packages, timeout_ms, revision, source, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+        `INSERT INTO tools (name, description, parameters, deps, packages, timeout_ms, revision, source, libs, bundle, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
          ON CONFLICT (name) DO UPDATE SET
            description = excluded.description, parameters = excluded.parameters, deps = excluded.deps,
            packages = excluded.packages, timeout_ms = excluded.timeout_ms, source = excluded.source,
+           libs = excluded.libs, bundle = excluded.bundle,
            revision = tools.revision + 1, updated_at = excluded.updated_at,
            disabled_at = NULL, disabled_reason = NULL`,
       )
@@ -113,6 +131,8 @@ export class ToolStore {
         JSON.stringify(m.packages),
         m.timeoutMs ?? null,
         tool.source,
+        m.libs?.length ? JSON.stringify(m.libs) : null,
+        tool.bundle ?? null,
         now,
         now,
       );
@@ -203,5 +223,6 @@ function toMeta(x: Row): ToolMeta {
     revision: Number(x.revision),
     ...(x.timeout_ms !== null && { timeoutMs: Number(x.timeout_ms) }),
     ...(x.disabled_at !== null && { disabled: { at: String(x.disabled_at), reason: String(x.disabled_reason) } }),
+    ...(x.libs !== null && x.libs !== undefined && { libs: JSON.parse(String(x.libs)) as LibraryUse[] }),
   };
 }

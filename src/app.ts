@@ -10,11 +10,13 @@ import type { ChatModel } from "./llm/model.ts";
 import { type Logger, noopLogger } from "./log.ts";
 import { createRunner, llmModule, type RunHandle, type Runner, toolsModule } from "./runner/index.ts";
 import { State } from "./state.ts";
+import { LibraryStore } from "./tools/libs.ts";
 import { ToolStore } from "./tools/store.ts";
 
 export interface Five {
   state: State;
   store: ToolStore;
+  libs: LibraryStore;
   runner: Runner;
   runs: RunTable;
   /** Every child process started since five started. */
@@ -28,6 +30,7 @@ export function createFive(cfg: Config, model: ChatModel, log: Logger = noopLogg
   const lost = state.markLostRuns();
   if (lost > 0) log.warn("background runs lost at restart", { count: lost });
   const store = new ToolStore(state, path.join(cfg.home, "tools"));
+  const libs = new LibraryStore(state);
   const runnerLog = log.child({ component: "runner" });
   // The loop is made below; a process only starts once it runs.
   let loop: Loop | undefined;
@@ -48,6 +51,7 @@ export function createFive(cfg: Config, model: ChatModel, log: Logger = noopLogg
   loop = new Loop({
     state,
     store,
+    libs,
     runner,
     runs,
     model,
@@ -62,6 +66,7 @@ export function createFive(cfg: Config, model: ChatModel, log: Logger = noopLogg
   return {
     state,
     store,
+    libs,
     runner,
     runs,
     processes,

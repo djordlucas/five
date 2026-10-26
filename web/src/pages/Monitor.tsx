@@ -1,3 +1,4 @@
+import { Code } from '../code';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { useLocation } from 'preact-iso';
 import { get, message, post, type ProcessDetail, type ProcessInfo } from '../api/client';
@@ -5,16 +6,16 @@ import { Badge, ui } from '../components/ui';
 import { clock, duration, pretty } from '../format';
 import { status } from '../live';
 import split from './Workspace.module.css';
-import styles from './Processes.module.css';
+import styles from './Monitor.module.css';
 
 const live = (p: ProcessInfo) => p.state === 'installing' || p.state === 'running';
 
 /**
- * Every child process five started since it started — each run_js, each call
+ * What five has running. For now its processes: every child process five started since it started — each run_js, each call
  * of a tool the agent built, each define_tool trial, each background run —
  * newest first, live ones to follow and kill.
  */
-export function Processes() {
+export function Monitor() {
   const { query } = useLocation();
   const open = query.id || undefined;
   const [list, setList] = useState<ProcessInfo[] | null>(null);
@@ -37,14 +38,16 @@ export function Processes() {
     <div class={`${split.split} ${open ? split.open : ''}`}>
       <nav class={split.list} aria-label="Processes">
         <p class="muted">
-          {list === null ? 'Loading…' : `${list.length} since five started${running ? ` · ${running} live` : ''}`}
+          {list === null
+            ? 'Loading…'
+            : `${list.length} child ${list.length === 1 ? 'process' : 'processes'} since five started, one for each tool call that runs code${running ? ` · ${running} live` : ''}`}
         </p>
         {error && <p class="error">{error}</p>}
         {list?.length === 0 && <p class="muted">None yet: the agent has not run any code.</p>}
         <ul class={split.entries}>
           {list?.map((p) => (
             <li key={p.id}>
-              <a href={`/processes?id=${p.id}`} class={split.entry} aria-current={p.id === open ? 'page' : undefined}>
+              <a href={`/monitor?id=${p.id}`} class={split.entry} aria-current={p.id === open ? 'page' : undefined}>
                 <span class={split.kind}>
                   <Badge state={p.state} />
                 </span>
@@ -66,8 +69,9 @@ export function Processes() {
           <Detail key={open} id={open} tick={tick} />
         ) : (
           <p class="card muted">
-            Each run of code is a Node.js process of its own, with all of Node and no permission model. Choose one to see its
-            code, arguments, output and result. Kept in memory: a restart of five starts the list over.
+            Each tool call that runs code — run_js, a tool the agent built, a define_tool trial, a background run — starts a
+            Node.js child process of its own, with all of Node and no permission model. Choose one to see its code,
+            arguments, output and result. Kept in memory: a restart of five starts the list over.
           </p>
         )}
       </section>
@@ -115,7 +119,7 @@ function Detail({ id, tick }: { id: string; tick: unknown }) {
   return (
     <article class={`card ${split.detail}`}>
       <header class={split.head}>
-        <a class={split.back} href="/processes" aria-label="All processes">
+        <a class={split.back} href="/monitor" aria-label="All processes">
           ‹
         </a>
         <div class={split.title}>
@@ -153,7 +157,11 @@ function Detail({ id, tick }: { id: string; tick: unknown }) {
       {p.state === 'ok' && (
         <section class={styles.part}>
           <h3>Result</h3>
-          <pre class={ui.pre}>{p.value === null || p.value === undefined ? '(no return value)' : pretty(p.value)}</pre>
+          {p.value === null || p.value === undefined ? (
+            <pre class={ui.pre}>(no return value)</pre>
+          ) : (
+            <Code class={ui.pre} text={pretty(p.value)} />
+          )}
         </section>
       )}
       <section class={styles.part}>
@@ -171,12 +179,12 @@ function Detail({ id, tick }: { id: string; tick: unknown }) {
       {p.args !== null && p.args !== undefined && (
         <section class={styles.part}>
           <h3>Arguments</h3>
-          <pre class={ui.pre}>{pretty(p.args)}</pre>
+          <Code class={ui.pre} text={pretty(p.args)} lang="json" />
         </section>
       )}
       <section class={styles.part}>
         <h3>Code</h3>
-        <pre class={`${ui.pre} ${styles.code}`}>{p.source || '(not readable)'}</pre>
+        <Code class={`${ui.pre} ${styles.code}`} text={p.source || '(not readable)'} lang={p.source ? 'js' : 'text'} />
       </section>
     </article>
   );

@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'preact/hooks';
 import { get, type InboxMessage, type InboxPage, message, post } from '../api/client';
+import { Icon } from '../components/Icon';
+import { ui } from '../components/ui';
 import { ago, clock } from '../format';
 import { markInboxSeen, status } from '../live';
 import { Markdown } from '../markdown';
@@ -8,7 +10,8 @@ import styles from './Inbox.module.css';
 /**
  * The messages between five and you: what the agent chose to tell you with
  * message_person, and what you wrote back, newest first. A message you send is
- * put before the prompt of the next turn; the loop never waits for one.
+ * put before the prompt of the next turn, or, sent as the next prompt, is that
+ * prompt; the loop never waits for one.
  */
 export function Inbox() {
   const [list, setList] = useState<InboxMessage[] | null>(null);
@@ -33,10 +36,10 @@ export function Inbox() {
   }, [last, turn]);
   useEffect(() => markInboxSeen(last), [last]);
 
-  const send = async () => {
+  const send = async (asPrompt = false) => {
     setSending(true);
     try {
-      await post<InboxMessage>('/inbox', { text: text.trim() });
+      await post<InboxMessage>('/inbox', { text: text.trim(), ...(asPrompt && { asPrompt }) });
       setText('');
       await load();
     } catch (err) {
@@ -68,9 +71,21 @@ export function Inbox() {
         />
         <div class={styles.row}>
           <span class="muted">⌘↩ sends</span>
-          <button type="submit" class="button" disabled={sending || !text.trim()}>
-            {sending ? 'Sending…' : 'Send'}
-          </button>
+          <span class={styles.actions}>
+            <button
+              type="button"
+              class={ui.action}
+              disabled={sending || !text.trim()}
+              onClick={() => void send(true)}
+              title="The next turn starts with this message as its prompt, in place of the one the agent set"
+            >
+              <Icon name="next" size={16} />
+              Send as next prompt
+            </button>
+            <button type="submit" class="button" disabled={sending || !text.trim()}>
+              {sending ? 'Sending…' : 'Send'}
+            </button>
+          </span>
         </div>
       </form>
 
@@ -89,10 +104,17 @@ export function Inbox() {
               </span>
               {m.from === 'person' && (
                 <span class="muted">
-                  {m.deliveredTurn ? `read before turn ${m.deliveredTurn}` : 'goes before the next turn'}
+                  {m.asPrompt
+                    ? m.deliveredTurn
+                      ? `turn ${m.deliveredTurn}'s prompt`
+                      : 'the next turn\'s prompt'
+                    : m.deliveredTurn
+                      ? `read before turn ${m.deliveredTurn}`
+                      : 'goes before the next turn'}
                 </span>
               )}
             </header>
+            {m.subject && <h2 class={styles.subject}>{m.subject}</h2>}
             <Markdown text={m.text} class={styles.body} />
           </li>
         ))}

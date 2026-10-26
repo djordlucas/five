@@ -19,11 +19,13 @@ import { recoverToolCalls } from "../llm/textcalls.ts";
 import { type Logger, noopLogger, preview } from "../log.ts";
 import type { Runner } from "../runner/index.ts";
 import type { Context, Event, EventBody, State, TurnEnd } from "../state.ts";
+import type { LibraryStore } from "../tools/libs.ts";
 import type { ToolStore } from "../tools/store.ts";
 import { checkArgs, coerceArgs, parseArgs } from "./args.ts";
 import { awaitRun, type BuiltinContext, builtins, disabledError, formatRun, startGenerated } from "./builtins/index.ts";
 import { sleep } from "./builtins/shared.ts";
 import { type ContextEnv, contextTools, contextToolsByName } from "./context.ts";
+import { imageData, mediaTools, mediaToolsByName } from "./media.ts";
 import { SEED_PROMPT, seedSystemPrompt } from "./prompt.ts";
 import type { RunTable } from "./runs.ts";
 import { Supervisor, type SupervisorSettings } from "./supervisor.ts";
@@ -37,6 +39,7 @@ const BACKOFF_MS = [5_000, 10_000, 30_000, 60_000];
 export interface LoopOptions {
   state: State;
   store: ToolStore;
+  libs: LibraryStore;
   runner: Runner;
   runs: RunTable;
   model: ChatModel;
@@ -65,6 +68,17 @@ export class Loop {
   /** Why the supervisor wants the loop paused after the turn that ended, if it does. */
   private pauseFor?: string;
   private retryAt: number | null = null;
+  /** The step in progress, for the status: the model writing, or a tool running. */
+  private live?: {
+    step: number;
+    phase: "model" | "tool";
+    startedAt: number;
+    tool?: string;
+    thinking?: string;
+    content?: string;
+  };
+  /** Images view_image attached in this step, shown after its results. */
+  private attached: string[] = [];
   private abort?: AbortController;
   /** Interrupts the wait between turns. */
   private wait?: AbortController;
@@ -80,6 +94,7 @@ export class Loop {
     this.supervisor = new Supervisor({
       state: opts.state,
       store: opts.store,
+      libs: opts.libs,
       workspace: opts.workspace,
       contextTokens: opts.contextTokens,
       defaults: opts.supervisor,
@@ -96,6 +111,16 @@ export class Loop {
       step: this.step,
       promptTokens: this.promptTokens,
       retryAt: this.retryAt ? new Date(this.retryAt).toISOString() : null,
+      ...(this.live && {
+        live: {
+          step: this.live.step,
+          phase: this.live.phase,
+          startedAt: new Date(this.live.startedAt).toISOString(),
+          ...(this.live.tool && { tool: this.live.tool }),
+          ...(this.live.thinking && { thinking: tail(this.live.thinking) }),
+          ...(this.live.content && { content: tail(this.live.content) }),
+        },
+      }),
     };
   }
 
@@ -135,9 +160,9 @@ export class Loop {
   }
 
   /** A message from the person: put before the next turn's prompt. */
-  receive(text: string): InboxMessage {
-    const m = this.o.state.addInbox(this.ctx.turn, "person", text);
-    this.emit({ type: "inbox", from: "person", text });
+  receive(text: string, asPrompt = false): InboxMessage {
+    const m = this.o.state.addInbox(this.ctx.turn, "person", text, { asPrompt });
+    this.emit({ type: "inbox", from: "person", text, ...(asPrompt && { asPrompt }) });
     this.o.log.info("message received", { id: m.id });
     return m;
   }
@@ -184,9 +209,9 @@ export class Loop {
     this.o.log.info("context reset");
   }
 
-  /** Delete the agent's tools, background runs and workspace files. */
+  /** Delete the agent's tools, libraries, background runs and workspace files. */
   private clean(): void {
-    const { workspace, store, runs, state, log } = this.o;
+    const { workspace, store, libs, runs, state, log } = this.o;
     // Run from the repo, the workspace is the repo: never delete that.
     if (fs.existsSync(path.join(workspace, ".git"))) {
       throw new Error(`the workspace ${workspace} is a git repository; its files are not deleted`);
@@ -194,6 +219,7 @@ export class Loop {
     runs.killAll(AGENT_ID);
     const tools = store.list().map((t) => t.name);
     for (const name of tools) store.remove(name);
+    for (const lib of libs.list()) libs.remove(lib.name);
     state.db.exec("DELETE FROM runs");
     const files = fs.readdirSync(workspace).filter((f) => f !== ".five");
     for (const f of files) fs.rmSync(path.join(workspace, f), { recursive: true, force: true });
@@ -257,11 +283,16 @@ export class Loop {
     const turn = ctx.turn;
     const log = this.o.log.child({ turn });
     const started = performance.now();
+    // The person's messages: one sent as the prompt becomes this turn's prompt; the others go before it.
+    const delivered = this.deliver(turn);
+    if (delivered.prompt !== undefined) {
+      ctx.next = delivered.prompt;
+      this.emit({ type: "context", by: "user", change: "this turn's prompt is your message, in place of the agent's" });
+    }
     const prompt = ctx.next;
     if (!this.o.state.getMeta("born")) this.o.state.setMeta("born", new Date().toISOString());
     const notes = this.supervisor.opening(ctx, this.promptTokens);
-    const delivered = this.deliver(turn);
-    if (delivered) notes.push(delivered);
+    if (delivered.note) notes.push(delivered.note);
     const warning = notes.join("\n\n") || undefined;
     this.turnPrompt = prompt;
     this.pauseFor = undefined;
@@ -281,6 +312,7 @@ export class Loop {
         const tools = this.tools();
         const t0 = performance.now();
         const self = this.supervisor.selfBlock(ctx, step, this.promptTokens);
+        this.live = { step, phase: "model", startedAt: Date.now() };
         const completion = await this.o.model.complete({
           messages: [
             { role: "system", content: ctx.system },
@@ -290,6 +322,10 @@ export class Loop {
           tools,
           signal: this.abort.signal,
           log: stepLog,
+          image: (p) => imageData(this.o.workspace, p),
+          onProgress: ({ thinking, content }) => {
+            if (this.live?.phase === "model") Object.assign(this.live, { thinking, content });
+          },
         });
         const durationMs = Math.round(performance.now() - t0);
         this.promptTokens = completion.usage?.prompt_tokens ?? this.promptTokens;
@@ -327,7 +363,9 @@ export class Loop {
         if (message.tool_calls.some((c) => this.supervisor.isWork(c))) worked = true;
         let end = false;
         let summary: string | undefined;
+        this.attached = [];
         for (const call of message.tool_calls) {
+          this.live = { step, phase: "tool", startedAt: Date.now(), tool: call.function.name };
           const t1 = performance.now();
           const raw = await this.dispatch(call, stepLog, (s) => {
             end = true;
@@ -347,6 +385,16 @@ export class Loop {
             durationMs: Math.round(performance.now() - t1),
           });
         }
+        // Images view_image asked for come after the results: a tool message carries no image.
+        if (this.attached.length) {
+          const paths = this.attached;
+          ctx.messages.push({
+            role: "user",
+            content: `[five] ${paths.length === 1 ? "The image" : "The images"} view_image attached: ${paths.join(", ")}`,
+            images: paths,
+          });
+          this.save();
+        }
         if (end) {
           reason = "end_turn";
           this.supervisor.endedWithSummary(ctx, opening, summary);
@@ -365,6 +413,7 @@ export class Loop {
     } finally {
       const steps = Math.min(this.step, this.o.maxSteps);
       this.step = 0;
+      this.live = undefined;
       this.busy = false;
       this.abort = undefined;
       this.pauseFor = this.supervisor.ended({ worked, reason, prompt, next: ctx.next });
@@ -381,16 +430,27 @@ export class Loop {
     }
   }
 
-  /** The person's messages not yet delivered, as the note this turn's prompt starts with. */
-  private deliver(turn: number): string | undefined {
+  /**
+   * The person's messages not yet delivered: a note this turn's prompt starts
+   * with, and the latest sent as the prompt, which becomes this turn's prompt.
+   */
+  private deliver(turn: number): { note?: string; prompt?: string } {
     const waiting = this.o.state.undelivered();
-    if (!waiting.length) return undefined;
+    if (!waiting.length) return {};
     this.o.state.markDelivered(
       waiting.map((m) => m.id),
       turn,
     );
-    const lines = waiting.map((m) => `[The person wrote to you, during turn ${m.turn}] ${m.text}`);
-    return `${lines.join("\n\n")}\n\n[five] Take it into account as you see fit; message_person answers. Your work goes on either way.`;
+    // The latest message sent as the prompt is the prompt; any others are notes before it.
+    const asPrompt = waiting.filter((m) => m.asPrompt).at(-1);
+    const notes = waiting.filter((m) => m !== asPrompt);
+    const lines = notes.map((m) => `[The person wrote to you, during turn ${m.turn}] ${m.text}`);
+    return {
+      ...(lines.length && {
+        note: `${lines.join("\n\n")}\n\n[five] Take it into account as you see fit; message_person answers. Your work goes on either way.`,
+      }),
+      ...(asPrompt && { prompt: asPrompt.text }),
+    };
   }
 
   /** Every tool the agent can call now: its context tools, seven's built-ins, and the enabled tools it built. */
@@ -398,6 +458,7 @@ export class Loop {
     const def = ({ name, description, parameters }: ToolDef) => ({ name, description, parameters });
     return [
       ...contextTools.map(def),
+      ...mediaTools.map(def),
       ...[...builtins().values()].map(def),
       ...this.o.store
         .list()
@@ -415,15 +476,23 @@ export class Loop {
     try {
       const parsed = parseArgs(raw ?? "");
       const own = contextToolsByName.get(name);
-      const builtin = own ? undefined : builtins().get(name);
-      const generated = own || builtin ? undefined : this.o.store.get(name);
-      const schema = (own ?? builtin)?.parameters ?? generated?.meta.parameters;
+      const media = own ? undefined : mediaToolsByName.get(name);
+      const builtin = own || media ? undefined : builtins().get(name);
+      const generated = own || media || builtin ? undefined : this.o.store.get(name);
+      const schema = (own ?? media ?? builtin)?.parameters ?? generated?.meta.parameters;
       const args = parsed.ok ? coerceArgs(schema, parsed.args) : {};
       const bad = !parsed.ok ? parsed.error : schema ? checkArgs(schema, args) : undefined;
       if (bad) result = `error: ${name}: ${bad}`;
       else if (own) {
         kind = "context";
         result = own.run(args, this.contextEnv(endTurn));
+      } else if (media) {
+        kind = "builtin";
+        result = await media.run(args, {
+          workspace: this.o.workspace,
+          imageSide: this.supervisor.settings.imageSide,
+          attachImage: (p) => this.attached.push(p),
+        });
       } else if (builtin) {
         kind = "builtin";
         result = await builtin.run(args, this.builtinContext(log));
@@ -466,7 +535,7 @@ export class Loop {
       },
       endTurn,
       selfBlock: () => this.selfBlock(),
-      sendMessage: (text) => this.supervisor.sendMessage(this.ctx.turn, text),
+      sendMessage: (subject, text) => this.supervisor.sendMessage(this.ctx.turn, subject, text),
       checkNext: (text) => this.supervisor.checkNext(text, this.turnPrompt),
       checkSelfNote: (length) => this.supervisor.checkSelfNote(length),
     };
@@ -477,6 +546,7 @@ export class Loop {
       agentId: AGENT_ID,
       runner: this.o.runner,
       store: this.o.store,
+      libs: this.o.libs,
       runs: this.o.runs,
       workspace: this.o.workspace,
       stateDb: this.o.stateDb,
@@ -497,4 +567,9 @@ export class Loop {
 
 function isFailure(result: string): boolean {
   return result.startsWith("error:") || result.startsWith("not saved:");
+}
+
+/** The end of a long text: what the status carries of a reply in progress. */
+function tail(text: string, max = 4000): string {
+  return text.length > max ? `…${text.slice(-max)}` : text;
 }

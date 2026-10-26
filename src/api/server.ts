@@ -15,12 +15,15 @@ import * as path from "node:path";
 import type { Five } from "../app.ts";
 import type { Config } from "../config.ts";
 import type { Logger } from "../log.ts";
+import { type LibraryStore, type LibraryUse, usersOf } from "../tools/libs.ts";
 import type {
   ContextView,
   ErrorBody,
   EventsPage,
   InboxMessage,
   InboxPage,
+  LibraryDetail,
+  LibraryInfo,
   Status,
   SupervisorView,
   ToolDetail,
@@ -77,6 +80,7 @@ class Raw {
 export function createApi(opts: ApiOptions): http.Server {
   const { five, cfg } = opts;
   const { loop, state, store } = five;
+  const libsOf = (used: LibraryUse[]) => libsOfWith(five.libs, used);
   const log = opts.log.child({ component: "api" });
   const routes: { method: string; pattern: RegExp; keys: string[]; handler: Handler; bytes?: boolean }[] = [];
   const route = (method: string, p: string, handler: Handler, opts: { bytes?: boolean } = {}) => {
@@ -126,6 +130,7 @@ export function createApi(opts: ApiOptions): http.Server {
       loop: loop.status(),
       messages: loop.ctx.messages.length,
       tools: store.list().length,
+      libraries: five.libs.list().length,
       lastSeq: state.lastSeq(),
       inboxLast: state.lastFromFive(),
     }),
@@ -210,7 +215,9 @@ export function createApi(opts: ApiOptions): http.Server {
   route("POST", "/api/v1/inbox", ({ body }): InboxMessage => {
     const t = text(body, "text").trim();
     if (t.length > MAX_MESSAGE_CHARS) throw new HttpError(400, `a message is at most ${MAX_MESSAGE_CHARS} characters`);
-    return loop.receive(t);
+    const asPrompt = (body as { asPrompt?: unknown } | undefined)?.asPrompt;
+    if (asPrompt !== undefined && typeof asPrompt !== "boolean") throw new HttpError(400, "asPrompt must be a boolean");
+    return loop.receive(t, asPrompt === true);
   });
 
   // ── events ──────────────────────────────────────────────────────────────
@@ -235,6 +242,7 @@ export function createApi(opts: ApiOptions): http.Server {
         revision: t.revision,
         updatedAt: t.updatedAt,
         ...(t.disabled && { disabled: t.disabled }),
+        ...(t.libs && { libs: libsOf(t.libs) }),
       }),
     ),
   }));
@@ -248,9 +256,34 @@ export function createApi(opts: ApiOptions): http.Server {
       revision: meta.revision,
       updatedAt: meta.updatedAt,
       ...(meta.disabled && { disabled: meta.disabled }),
+      ...(meta.libs && { libs: libsOf(meta.libs) }),
       parameters: meta.parameters,
       source: t.source,
     };
+  });
+
+  // ── libraries ───────────────────────────────────────────────────────────
+  const libraryInfo = (name: string): LibraryInfo | undefined => {
+    const lib = five.libs.get(name);
+    if (!lib) return undefined;
+    const { meta } = lib;
+    return {
+      name: meta.name,
+      description: meta.description,
+      revision: meta.revision,
+      updatedAt: meta.updatedAt,
+      usedBy: usersOf(meta.name, store, five.libs).tools.map((t) => ({ tool: t.name, revision: t.revision })),
+    };
+  };
+  route("GET", "/api/v1/libraries", () => ({
+    libraries: five.libs.list().flatMap((l) => libraryInfo(l.name) ?? []),
+  }));
+  route("GET", "/api/v1/libraries/:name", ({ params }): LibraryDetail => {
+    const name = params.name ?? "";
+    const info = libraryInfo(name);
+    const lib = five.libs.get(name);
+    if (!info || !lib) throw new HttpError(404, `no library "${name}"`);
+    return { ...info, source: lib.source, deps: lib.meta.deps, importedBy: usersOf(name, store, five.libs).libs };
   });
 
   // ── child processes ─────────────────────────────────────────────────────
@@ -294,11 +327,14 @@ export function createApi(opts: ApiOptions): http.Server {
   route("GET", "/api/v1/workspace/files", ({ query }) => workspace.list(wsPath(query)));
   route("GET", "/api/v1/workspace/file", ({ query }) => {
     const { entry, bytes } = workspace.read(wsPath(query));
+    const shown = SHOWN[path.extname(entry.name).toLowerCase()];
     return new Raw(
       {
-        // Bytes a browser does not run: an HTML file the agent wrote cannot act on the UI's origin.
-        "content-type": "application/octet-stream",
-        "content-security-policy": "sandbox",
+        // Bytes a browser does not run: an HTML file the agent wrote cannot act on the UI's origin. An
+        // image or a PDF has its own type, to show in the UI; the sandbox stays but on a PDF, which a
+        // browser's viewer refuses to open sandboxed.
+        "content-type": shown ?? "application/octet-stream",
+        ...(shown !== "application/pdf" && { "content-security-policy": "sandbox" }),
         etag: `"${entry.version}"`,
         "last-modified": new Date(entry.modified).toUTCString(),
         ...(query.get("download") === "true" && {
@@ -439,6 +475,25 @@ const TYPES: Record<string, string> = {
 };
 
 /** A file of the built UI, or index.html for any other path (the UI routes in the browser). */
+/** A tool's libraries, with each library's revision now. */
+function libsOfWith(libs: LibraryStore, used: LibraryUse[]): NonNullable<ToolInfo["libs"]> {
+  return used.map((l) => {
+    const now = libs.get(l.name)?.meta.revision;
+    return { ...l, ...(now !== undefined && { current: now }) };
+  });
+}
+
+/** Workspace files served as what they are, to show in the UI; SVG is not one, as it can hold script. */
+const SHOWN: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".bmp": "image/bmp",
+  ".pdf": "application/pdf",
+};
+
 function serveWeb(dir: string | undefined, pathname: string, res: http.ServerResponse): void {
   if (!dir || !fs.existsSync(path.join(dir, "index.html"))) {
     res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });

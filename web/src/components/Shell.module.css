@@ -1,79 +1,100 @@
 .shell {
   display: grid;
-  grid-template-columns: var(--rail) 1fr;
+  grid-template-rows: auto minmax(0, 1fr);
   height: 100%;
 }
 
-.rail {
+/* The top bar: the brand, the sections as tabs, and five's state. */
+.top {
   display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  padding: var(--space-4) var(--space-3);
+  align-items: center;
+  gap: var(--space-4);
+  min-height: 56px;
+  padding: 0 var(--space-6);
   background: var(--surface);
-  border-right: 1px solid var(--border);
-  overflow-y: auto;
+  border-bottom: 1px solid var(--border);
 }
 
 .brand {
+  flex: none;
   display: grid;
   place-items: center;
-  width: 36px;
-  height: 36px;
-  margin: 0 0 var(--space-4) var(--space-2);
+  width: 32px;
+  height: 32px;
   border-radius: var(--radius);
   background: var(--text);
   color: var(--bg);
   font-weight: 700;
-  font-size: var(--text-lg);
+  font-size: var(--text-md);
   text-decoration: none;
 }
 
-.railLink {
+.nav {
+  display: flex;
+  align-items: stretch;
+  align-self: stretch;
+  gap: var(--space-1);
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.navLink {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: var(--space-3);
-  min-height: var(--touch);
+  gap: var(--space-2);
   padding: 0 var(--space-3);
-  border-radius: var(--radius);
+  border-bottom: 2px solid transparent;
   color: var(--text-2);
+  font-size: var(--text-sm);
+  white-space: nowrap;
   text-decoration: none;
 }
 
-.railLink:hover {
-  background: var(--surface-2);
+.navLink:hover {
   color: var(--text);
 }
 
-.railLink[aria-current='page'] {
-  background: var(--surface-2);
+.navLink[aria-current='page'] {
+  border-bottom-color: var(--text);
   color: var(--text);
   font-weight: 600;
+}
+
+.navLink .unread {
+  position: absolute;
+  top: 12px;
+  right: 2px;
 }
 
 .unread {
   width: 8px;
   height: 8px;
-  margin-left: auto;
   border-radius: 50%;
   background: var(--accent);
 }
 
-.railFoot {
+/* The section's name: the tabs say it on desktop. */
+.title {
+  display: none;
+}
+
+.status {
   display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  margin-top: auto;
-  padding-top: var(--space-4);
+  align-items: center;
+  gap: var(--space-3);
+  margin-left: auto;
 }
 
 .control {
-  min-height: var(--touch);
-  padding: 0 var(--space-3);
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
   border: none;
   border-radius: var(--radius);
   background: none;
   color: var(--text-2);
-  text-align: left;
   cursor: pointer;
 }
 
@@ -82,19 +103,12 @@
   color: var(--text);
 }
 
-.main {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  overflow-y: auto;
-}
-
-.header {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-5) var(--space-6) var(--space-3);
+.themeDot {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  background: linear-gradient(90deg, currentColor 50%, transparent 50%);
 }
 
 .live {
@@ -103,6 +117,7 @@
   gap: var(--space-2);
   color: var(--text-2);
   font-size: var(--text-sm);
+  white-space: nowrap;
 }
 
 .live::before {
@@ -121,12 +136,17 @@
   background: var(--warn);
 }
 
-.header h1 {
-  font-size: var(--text-xl);
-  margin-right: auto;
+/* What scrolls, below the top bar; the padding is inside it, so a sticky bar meets its edge. */
+.scroll {
+  min-width: 0;
+  overflow-y: auto;
 }
 
+/* A page's contents, in one centered column. */
 .content {
+  min-width: 0;
+  max-width: calc(1200px + 2 * var(--space-6));
+  margin: 0 auto;
   padding: var(--space-3) var(--space-6) var(--space-6);
 }
 
@@ -136,16 +156,23 @@
 
 @media (max-width: 767px) {
   .shell {
-    grid-template-columns: 1fr;
-    grid-template-rows: 1fr auto;
+    grid-template-rows: auto minmax(0, 1fr) auto;
   }
 
-  .rail {
+  .top {
+    gap: var(--space-3);
+    min-height: 52px;
+    padding: 0 var(--space-4);
+  }
+
+  .nav,
+  .control {
     display: none;
   }
 
-  .header {
-    padding: var(--space-4) var(--space-4) var(--space-2);
+  .title {
+    display: block;
+    font-size: var(--text-lg);
   }
 
   .content {
@@ -173,7 +200,7 @@
     background: none;
     color: var(--text-2);
     position: relative;
-    font-size: 10.5px;
+    font-size: var(--text-2xs);
     text-decoration: none;
     cursor: pointer;
   }
@@ -188,20 +215,11 @@
     position: absolute;
     top: 8px;
     left: calc(50% + 8px);
-    margin: 0;
   }
 
   .tab[aria-current='page'] {
     color: var(--accent);
     font-weight: 600;
-  }
-
-  .themeDot {
-    width: 18px;
-    height: 18px;
-    border-radius: 50%;
-    border: 2px solid currentColor;
-    background: linear-gradient(90deg, currentColor 50%, transparent 50%);
   }
 
   .tab span:last-child {

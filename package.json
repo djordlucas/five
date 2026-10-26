@@ -20,7 +20,9 @@
     "ci": "npm run typecheck && npm run lint && npm test"
   },
   "dependencies": {
-    "esbuild": "0.28.2"
+    "@napi-rs/canvas": "1.0.10",
+    "esbuild": "0.28.2",
+    "unpdf": "1.8.1"
   },
   "devDependencies": {
     "@biomejs/biome": "2.6.2",

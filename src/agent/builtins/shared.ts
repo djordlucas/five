@@ -4,6 +4,7 @@ import { transformSync } from "esbuild";
 import type { ToolDef } from "../../llm/model.ts";
 import type { Logger } from "../../log.ts";
 import type { RunHandle, Runner, RunResult } from "../../runner/index.ts";
+import type { LibraryStore } from "../../tools/libs.ts";
 import type { StoredTool, ToolStore } from "../../tools/store.ts";
 import type { RunTable } from "../runs.ts";
 
@@ -16,6 +17,8 @@ export interface BuiltinContext {
   agentId: string;
   runner: Runner;
   store: ToolStore;
+  /** The agent's libraries, bundled into the code that imports them. */
+  libs: LibraryStore;
   runs: RunTable;
   workspace: string;
   /** Five's own database, which the sql built-in refuses to open. */

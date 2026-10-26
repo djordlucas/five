@@ -1,4 +1,5 @@
 import { h, type ComponentChildren } from 'preact';
+import { highlight, langOf } from './code';
 import { Lexer, type Token, type Tokens } from 'marked';
 
 /**
@@ -48,7 +49,7 @@ function block(t: Token, key: number): ComponentChildren {
       const c = t as Tokens.Code;
       return (
         <pre key={key} data-lang={c.lang || undefined}>
-          <code>{c.text}</code>
+          <code>{highlight(c.text, langOf(c.lang, c.text))}</code>
         </pre>
       );
     }

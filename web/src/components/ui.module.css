@@ -7,10 +7,10 @@
   border-radius: var(--radius);
   background: var(--surface-2);
   color: var(--text-2);
-  font-size: 12px;
-  font-family: var(--mono);
+  font-size: var(--text-xs);
   line-height: 20px;
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 .running,
@@ -86,12 +86,15 @@
   background: var(--surface-2);
   border-radius: var(--radius);
   font-family: var(--mono);
-  font-size: 13px;
+  font-size: var(--code);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
 .action {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
   min-height: 36px;
   padding: 0 var(--space-3);
   border: 1px solid var(--border);
@@ -153,28 +156,56 @@
   border-radius: 10px;
   background: var(--accent);
   color: var(--accent-text);
-  font-size: 12px;
+  font-size: var(--text-xs);
   font-weight: 600;
   text-align: center;
 }
 
-.meter {
-  height: 8px;
-  overflow: hidden;
-  border-radius: 4px;
-  background: var(--surface-2);
+.gauge {
+  position: relative;
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
 }
 
-.meter > span {
-  display: block;
-  height: 100%;
-  background: var(--accent);
+.gauge svg {
+  position: absolute;
+  inset: 3px;
+  width: calc(100% - 6px);
+  height: calc(100% - 6px);
+  /* The ring starts at the top and fills clockwise. */
+  transform: rotate(-90deg);
 }
 
-.meter[data-level='warn'] > span {
-  background: var(--warn);
+.gauge circle {
+  fill: none;
+  stroke-width: 3.5;
 }
 
-.meter[data-level='danger'] > span {
-  background: var(--danger);
+.track {
+  stroke: var(--surface-2);
+}
+
+.fill {
+  stroke: var(--accent);
+  transition: stroke-dasharray 0.4s;
+}
+
+.gauge[data-level='warn'] .fill {
+  stroke: var(--warn);
+}
+
+.gauge[data-level='danger'] .fill {
+  stroke: var(--danger);
+}
+
+.gauge > span {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }

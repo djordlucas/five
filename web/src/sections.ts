@@ -1,4 +1,4 @@
-export type IconName = 'loop' | 'context' | 'inbox' | 'supervisor' | 'tool' | 'folder' | 'process';
+export type IconName = 'activity' | 'inbox' | 'folder' | 'monitor' | 'config' | 'play' | 'pause' | 'step' | 'stop' | 'alert' | 'flag' | 'edit' | 'person' | 'chip' | 'file' | 'context' | 'tool' | 'layers' | 'clock' | 'next' | 'plus' | 'upload' | 'download' | 'trash' | 'save' | 'search' | 'database' | 'chat' | 'reset' | 'image' | 'library';
 
 export interface Section {
   path: string;
@@ -7,13 +7,11 @@ export interface Section {
 }
 
 export const sections: Section[] = [
-  { path: '/', label: 'Loop', icon: 'loop' },
-  { path: '/context', label: 'Context', icon: 'context' },
-  { path: '/inbox', label: 'Inbox', icon: 'inbox' },
-  { path: '/supervisor', label: 'Supervisor', icon: 'supervisor' },
-  { path: '/tools', label: 'Tools', icon: 'tool' },
+  { path: '/', label: 'Activity', icon: 'activity' },
   { path: '/workspace', label: 'Workspace', icon: 'folder' },
-  { path: '/processes', label: 'Processes', icon: 'process' },
+  { path: '/inbox', label: 'Inbox', icon: 'inbox' },
+  { path: '/config', label: 'Config', icon: 'config' },
+  { path: '/monitor', label: 'Monitor', icon: 'monitor' },
 ];
 
 export function sectionFor(path: string): Section {

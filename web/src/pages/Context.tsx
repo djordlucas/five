@@ -1,5 +1,9 @@
 import { useEffect, useState } from 'preact/hooks';
 import { type ContextView, del, get, type Message, message, post, put } from '../api/client';
+import { Code } from '../code';
+import { fileHref, rawUrl } from '../workspace';
+import { Icon } from '../components/Icon';
+import type { IconName } from '../sections';
 import { prettyArgs } from '../format';
 import { refresh, status } from '../live';
 import styles from './Context.module.css';
@@ -45,6 +49,7 @@ export function Context() {
 
       <Field
         label="Next prompt"
+        icon="next"
         hint="The user message that starts the next turn."
         value={ctx.next}
         rows={3}
@@ -53,24 +58,32 @@ export function Context() {
       />
       <Field
         label="System prompt"
+        icon="context"
         hint={`${ctx.system.length.toLocaleString()} characters`}
         value={ctx.system}
-        rows={14}
+        rows={10}
         locked={locked}
         onSave={(text) => change(() => put('/context/system', { text }))}
       />
       <section class={`card ${styles.field}`}>
         <div class={styles.fieldHead}>
-          <h2>Self block</h2>
+          <h2>
+            <Icon name="person" size={18} />
+            Self block
+          </h2>
           <span class="muted">Written by five for every call, after the messages; read-only.</span>
         </div>
-        <textarea class={styles.text} rows={10} value={ctx.self} readOnly aria-label="Self block" />
+        <textarea class={styles.text} rows={6} value={ctx.self} readOnly aria-label="Self block" />
       </section>
 
-      <section class={styles.messages} aria-label="Messages">
-        <h2>
-          Messages <span class="muted">{ctx.messages.length}</span>
-        </h2>
+      {/* Folded by default: the messages run long, and the reset is below them. */}
+      <details class={styles.messages} aria-label="Messages">
+        <summary>
+          <h2>
+            <Icon name="chat" size={18} />
+            Messages <span class="muted">{ctx.messages.length}</span>
+          </h2>
+        </summary>
         {ctx.messages.length === 0 && <p class="muted">None yet.</p>}
         <ol class={styles.list}>
           {ctx.messages.map((m, i) => (
@@ -85,7 +98,7 @@ export function Context() {
             />
           ))}
         </ol>
-      </section>
+      </details>
 
       <Reset locked={locked} onReset={(clean) => change(() => post('/context/reset', { clean }))} />
     </div>
@@ -94,6 +107,7 @@ export function Context() {
 
 function Field(props: {
   label: string;
+  icon: IconName;
   hint: string;
   value: string;
   rows: number;
@@ -111,7 +125,10 @@ function Field(props: {
   return (
     <section class={`card ${styles.field}`}>
       <div class={styles.fieldHead}>
-        <h2>{props.label}</h2>
+        <h2>
+          <Icon name={props.icon} size={18} />
+          {props.label}
+        </h2>
         <span class="muted">{props.hint}</span>
       </div>
       <textarea
@@ -182,7 +199,7 @@ function MessageRow(props: {
         <>
           <textarea
             class={styles.text}
-            rows={Math.min(16, Math.max(3, text.split('\n').length + 1))}
+            rows={Math.min(12, Math.max(3, text.split('\n').length + 1))}
             value={text}
             aria-label={`Message ${index}`}
             onInput={(e) => setText((e.target as HTMLTextAreaElement).value)}
@@ -204,14 +221,23 @@ function MessageRow(props: {
           </div>
         </>
       ) : (
-        m.content && <pre class={styles.content}>{m.content}</pre>
+        m.content && <Code class={styles.content} text={m.content} />
       )}
+      {m.role === 'user' && m.images?.length ? (
+        <div class={styles.images}>
+          {m.images.map((p) => (
+            <a key={p} href={fileHref(p)} title={p}>
+              <img src={rawUrl(p)} alt={p} loading="lazy" />
+            </a>
+          ))}
+        </div>
+      ) : null}
       {calls.map((c) => (
         <details key={c.id} class={styles.call}>
           <summary>
             calls <code>{c.function.name}</code>
           </summary>
-          <pre class={styles.content}>{prettyArgs(c.function.arguments)}</pre>
+          <Code class={styles.content} text={prettyArgs(c.function.arguments)} lang="json" />
         </details>
       ))}
     </li>
@@ -224,7 +250,10 @@ function Reset({ locked, onReset }: { locked: boolean; onReset: (clean: boolean)
   return (
     <section class={`card ${styles.reset}`}>
       <div>
-        <h2>Start over</h2>
+        <h2>
+          <Icon name="reset" size={18} />
+          Start over
+        </h2>
         <p class="muted">The seed system prompt and prompt, no messages, turn 0, and the timeline cleared.</p>
       </div>
       {sure ? (

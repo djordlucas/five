@@ -85,3 +85,15 @@ export function fieldValue(text: string, isNull: boolean, type: string): unknown
   if (numeric && text.trim() !== '' && Number.isFinite(Number(text))) return Number(text);
   return text;
 }
+
+/** A workspace file's URL, served as what it is when an image or a PDF. */
+export function rawUrl(path: string): string {
+  return `/api/v1/workspace/file?path=${encodeURIComponent(path)}`;
+}
+
+/** What a file shows as, by its name: an image, a PDF, or anything else. */
+export function mediaOf(path: string): 'image' | 'pdf' | undefined {
+  if (/\.(png|jpe?g|gif|webp|bmp)$/i.test(path)) return 'image';
+  if (/\.pdf$/i.test(path)) return 'pdf';
+  return undefined;
+}

@@ -5,7 +5,7 @@
 COMPOSE := docker compose
 DEV     := $(COMPOSE) run --rm dev
 
-.PHONY: help image image-dev up down logs dev ci deps-reset ci-host web-host start-host clean
+.PHONY: help image image-dev up down logs dev ci deps-reset ci-host web-host start-host ui-host clean
 
 help:
 	@echo "make up         run five in the background; web UI on port 5555 (every interface)"
@@ -15,6 +15,7 @@ help:
 	@echo "make ci         typecheck + lint + test, and the web UI's typecheck, in the dev container"
 	@echo "make ci-host    the same on the host's Node (>= 24)"
 	@echo "make start-host build the web UI and run five on the host"
+	@echo "make ui-host    the web UI from source, reloading as it changes, on port 5173 (every interface); API from five on :5555"
 
 image:
 	$(COMPOSE) build five
@@ -51,6 +52,10 @@ web-host:
 
 start-host: web-host
 	npm start
+
+# Vite's dev server: edits to web/ show at once, without rebuilding five.
+ui-host:
+	npm --prefix web run dev -- --host 0.0.0.0 --port 5173 --strictPort
 
 clean:
 	$(COMPOSE) down --volumes --remove-orphans

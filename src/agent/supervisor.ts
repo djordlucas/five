@@ -21,6 +21,7 @@ import type { SupervisorField, SupervisorSettings, SupervisorView } from "../api
 import type { Message, ToolCall } from "../llm/model.ts";
 import type { Logger } from "../log.ts";
 import type { Context, EventBody, State, TurnEnd } from "../state.ts";
+import type { LibraryStore } from "../tools/libs.ts";
 import type { ToolStore } from "../tools/store.ts";
 
 export type { SupervisorSettings } from "../api/types.ts";
@@ -155,6 +156,15 @@ export const FIELDS: SupervisorField[] = [
     max: MAX_RESULT_CHARS,
     help: "A run's result longer than this is kept whole in results/, and the context gets its start and the file's path. 0: never; results are cut at 16,000.",
   },
+  {
+    key: "imageSide",
+    group: "Results",
+    label: "Images shrunk to",
+    unit: "px",
+    min: 256,
+    max: 2048,
+    help: "view_image shrinks an image to fit this many pixels a side before the model sees it: a bigger image costs more context.",
+  },
 ];
 
 /** The settings when the environment sets none. */
@@ -174,6 +184,7 @@ export const DEFAULTS: SupervisorSettings = {
   selfNoteChars: 1500,
   messagesPerTurn: 1,
   resultChars: 3000,
+  imageSide: 1024,
 };
 
 /** A next prompt that waits for someone: "Awaiting user request …", "Maintain standby mode …". */
@@ -187,6 +198,7 @@ const DONE_REPORT =
 export interface SupervisorOptions {
   state: State;
   store: ToolStore;
+  libs: LibraryStore;
   workspace: string;
   contextTokens: number;
   /** The settings from the environment; saved changes go on top. */
@@ -371,15 +383,15 @@ export class Supervisor {
   }
 
   /** Put a message in the person's inbox, unless this turn sent its share. */
-  sendMessage(turn: number, text: string): string {
+  sendMessage(turn: number, subject: string, text: string): string {
     const max = this.settings.messagesPerTurn;
     if (max <= 0) return "error: messages to the person are off for now. Keep working.";
     if (this.messaged >= max) {
       return `error: you sent the person ${max === 1 ? "a message" : `${max} messages`} this turn already; ${max === 1 ? "one" : max} a turn. Keep working.`;
     }
     this.messaged++;
-    const m = this.o.state.addInbox(turn, "five", text);
-    this.o.emit({ type: "inbox", from: "five", text });
+    const m = this.o.state.addInbox(turn, "five", text, { subject });
+    this.o.emit({ type: "inbox", from: "five", subject, text });
     this.o.log.info("message sent", { id: m.id });
     return "sent. The person reads the inbox now and then; a reply, if one comes, is put before the prompt of a later turn. Do not wait for it: go on with your work.";
   }
@@ -412,6 +424,7 @@ export class Supervisor {
     const born = state.getMeta("born");
     const goal = /^## Goal[ \t]*\n+([^\n]+)/m.exec(ctx.system)?.[1]?.trim();
     const tools = store.list().map((t) => t.name);
+    const libraries = this.o.libs.list().map((l) => l.name);
     let notes = 0;
     let self = "";
     try {
@@ -429,7 +442,7 @@ export class Supervisor {
       `You are five. This is turn ${ctx.turn}${step ? `, step ${step}` : ""}${born ? `; you have run since ${born.slice(0, 16).replace("T", " ")} UTC` : ""}.`,
       ...(goal ? [`Your goal: ${clip(goal, 240)}`] : []),
       `Working memory — this context: ${used === null ? "not measured yet" : `${tokens(used)} of ${tokens(contextTokens)} tokens at the last call (${share(used, contextTokens)}%)`}, ${ctx.messages.length} messages.`,
-      `Long-term memory: ${notes} note${notes === 1 ? "" : "s"} in ${MEMORY_DIR}/. Tools you built: ${tools.length ? clip(tools.join(", "), 300) : "none yet"}.`,
+      `Long-term memory: ${notes} note${notes === 1 ? "" : "s"} in ${MEMORY_DIR}/. Tools you built: ${tools.length ? clip(tools.join(", "), 300) : "none yet"}. Libraries: ${libraries.length ? clip(libraries.join(", "), 200) : "none yet"}.`,
       `Inbox: ${inbox.sent} message${inbox.sent === 1 ? "" : "s"} sent to the person${inbox.lastSentTurn === null ? "" : `, the last on turn ${inbox.lastSentTurn}`}; ${inbox.received} from them.`,
       "",
       `## Your self note (${MEMORY_DIR}/${SELF_NOTE}.md)`,

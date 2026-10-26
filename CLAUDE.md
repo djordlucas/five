@@ -6,7 +6,8 @@
   client, logging, web tokens. Keep those close to seven's so fixes port over.
 - Five's own parts: `src/agent/loop.ts` (the loop), `src/agent/supervisor.ts`
   (every guard and nudge, and their live settings),
-  `src/agent/context.ts` (context tools), `src/agent/prompt.ts` (the seed),
+  `src/agent/context.ts` (context tools), `src/agent/media.ts` (images and PDFs),
+  `src/tools/libs.ts` and `src/agent/builtins/libs.ts` (libraries), `src/agent/prompt.ts` (the seed),
   `src/state.ts`, `src/api/server.ts`.
 - Verify with `make ci-host` (or `make ci`) before committing.
 - An API change touches `src/api/server.ts`, `src/api/types.ts`, the test, the
