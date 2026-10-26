@@ -84,6 +84,32 @@
   gap: var(--space-2);
 }
 
+.messages > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--touch);
+  cursor: pointer;
+}
+
+.messages > summary h2 {
+  display: inline;
+}
+
+.messages > summary::before {
+  content: '▸';
+  color: var(--text-2);
+  transition: transform 0.15s;
+}
+
+.messages[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.messages[open] > summary {
+  margin-bottom: var(--space-2);
+}
+
 .list {
   list-style: none;
   margin: 0;
@@ -137,7 +163,7 @@
 
 .content {
   margin: 0;
-  max-height: 320px;
+  max-height: 200px;
   overflow: auto;
   font-family: var(--mono);
   font-size: 13px;
@@ -172,4 +198,13 @@
   gap: var(--space-2);
   margin-right: auto;
   font-size: var(--text-sm);
+}
+
+/* Every box that scrolls stops short of the right edge, leaving a strip where
+   the wheel scrolls the page instead. */
+@media (min-width: 768px) {
+  .text,
+  .content {
+    width: calc(100% - 56px);
+  }
 }

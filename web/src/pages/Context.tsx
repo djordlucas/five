@@ -55,7 +55,7 @@ export function Context() {
         label="System prompt"
         hint={`${ctx.system.length.toLocaleString()} characters`}
         value={ctx.system}
-        rows={14}
+        rows={10}
         locked={locked}
         onSave={(text) => change(() => put('/context/system', { text }))}
       />
@@ -64,13 +64,16 @@ export function Context() {
           <h2>Self block</h2>
           <span class="muted">Written by five for every call, after the messages; read-only.</span>
         </div>
-        <textarea class={styles.text} rows={10} value={ctx.self} readOnly aria-label="Self block" />
+        <textarea class={styles.text} rows={6} value={ctx.self} readOnly aria-label="Self block" />
       </section>
 
-      <section class={styles.messages} aria-label="Messages">
-        <h2>
-          Messages <span class="muted">{ctx.messages.length}</span>
-        </h2>
+      {/* Folded by default: the messages run long, and the reset is below them. */}
+      <details class={styles.messages} aria-label="Messages">
+        <summary>
+          <h2>
+            Messages <span class="muted">{ctx.messages.length}</span>
+          </h2>
+        </summary>
         {ctx.messages.length === 0 && <p class="muted">None yet.</p>}
         <ol class={styles.list}>
           {ctx.messages.map((m, i) => (
@@ -85,7 +88,7 @@ export function Context() {
             />
           ))}
         </ol>
-      </section>
+      </details>
 
       <Reset locked={locked} onReset={(clean) => change(() => post('/context/reset', { clean }))} />
     </div>
@@ -182,7 +185,7 @@ function MessageRow(props: {
         <>
           <textarea
             class={styles.text}
-            rows={Math.min(16, Math.max(3, text.split('\n').length + 1))}
+            rows={Math.min(12, Math.max(3, text.split('\n').length + 1))}
             value={text}
             aria-label={`Message ${index}`}
             onInput={(e) => setText((e.target as HTMLTextAreaElement).value)}
