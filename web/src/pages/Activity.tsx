@@ -2,6 +2,7 @@ import { signal } from '@preact/signals';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { type Event, message, post } from '../api/client';
 import { Code } from '../code';
+import { fileHref, rawUrl } from '../workspace';
 import { Icon } from '../components/Icon';
 import type { IconName } from '../sections';
 import { Badge, Gauge } from '../components/ui';
@@ -274,6 +275,17 @@ function TurnView({ t }: { t: Turn }) {
   );
 }
 
+/** The image view_image attached, from its result: "attached results/images/x.jpg (…)". */
+function Attached({ result }: { result: string }) {
+  const path = /^attached (\S+) \(/.exec(result)?.[1];
+  if (!path) return null;
+  return (
+    <a href={fileHref(path)} class={styles.attached} title={path}>
+      <img src={rawUrl(path)} alt={path} loading="lazy" />
+    </a>
+  );
+}
+
 /** When an event happened, at the right edge of its box. */
 function At({ iso }: { iso: string }) {
   return <span class={styles.at}>{clock(iso)}</span>;
@@ -326,6 +338,7 @@ function Step({ e, results }: { e: Of<'model'>; results: Map<string, Of<'tool'>>
             </summary>
             <Code class={styles.pre} text={prettyArgs(c.arguments)} lang="json" />
             {r && <Code class={styles.pre} text={r.result} />}
+            {r && <Attached result={r.result} />}
           </details>
         );
       })}

@@ -211,3 +211,17 @@
     width: calc(100% - 56px);
   }
 }
+
+.images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.images img {
+  display: block;
+  max-width: 200px;
+  max-height: 150px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}

@@ -62,7 +62,7 @@ Nothing yet.
 
 ## Tools
 
-run_js executes code; define_tool, read_tool and delete_tool manage the tools you build; start_tool, run_status, wait_run, kill_run and list_runs run work in the background; tool_health, disable_tool and enable_tool deal with misbehaving tools; sql works with SQLite databases. Tools you built earlier may already exist: a tool's description is in your tool list. Build a tool only when you will use it again.
+run_js executes code; define_tool, read_tool and delete_tool manage the tools you build; start_tool, run_status, wait_run, kill_run and list_runs run work in the background; tool_health, disable_tool and enable_tool deal with misbehaving tools; sql works with SQLite databases; view_image lets you see an image, and read_pdf reads a PDF. Tools you built earlier may already exist: a tool's description is in your tool list. Build a tool only when you will use it again.
 
 Every run is a fresh Node.js ${process.versions.node} process: an ES module, TypeScript allowed, top-level await, all of Node (node:fs is enough for files) and any npm package. A tool is a module whose default export is \`async (args) => result\`. Anything printed is returned to you; a long result is cut, and the whole of it kept in a file under results/ whose path the result gives. The working directory is the workspace, ${opts.workspace}. In a run, \`five.llm.chat(prompt, system?)\` calls the model you run on, \`five.db(path)\` opens a SQLite database in the workspace, and \`five.tools.<name>(args)\` calls one of your tools.
 

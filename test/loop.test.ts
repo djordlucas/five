@@ -31,15 +31,21 @@ type Reply = { content?: string; calls?: [string, Record<string, unknown>][]; to
  * its messages without five's self block, which ends each one, and the block
  * ("" when it is off).
  */
-function scripted(replies: Reply[]): ChatModel & { requests: Message[][]; selves: string[] } {
+function scripted(
+  replies: Reply[],
+): ChatModel & { requests: Message[][]; selves: string[]; images: (string | undefined)[][] } {
   const requests: Message[][] = [];
   const selves: string[] = [];
+  const images: (string | undefined)[][] = [];
   let n = 0;
   return {
     requests,
     selves,
+    images,
     async complete(req: CompletionRequest): Promise<Completion> {
       const messages = structuredClone(req.messages);
+      // What a model that sees would get: each attached image's bytes, as base64.
+      images.push(messages.flatMap((m) => ("images" in m && m.images ? m.images.map((p) => req.image?.(p)) : [])));
       const last = messages.at(-1);
       const self = last?.role === "user" && last.content.startsWith("## You, now") ? messages.pop() : undefined;
       selves.push(self?.content ?? "");
@@ -785,4 +791,75 @@ test("the supervisor's settings change live through the API, outlive a restart, 
   again.loop.supervisor.resetSettings();
   assert.deepEqual(again.loop.supervisor.view().changed, []);
   assert.equal(again.loop.supervisor.settings.selfBlock, true);
+});
+
+/** A two-page PDF: text on page one, only a drawn box on page two. */
+function twoPagePdf(): Buffer {
+  const stream = (s: string) => `<< /Length ${s.length} >>\nstream\n${s}\nendstream`;
+  const objs = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 4 0 R /Resources << /Font << /F1 7 0 R >> >> >>",
+    stream("BT /F1 18 Tf 20 100 Td (Hello from page one) Tj ET"),
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 6 0 R >>",
+    stream("0 0 1 rg 50 50 200 100 re f"),
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+  ];
+  let out = "%PDF-1.4\n";
+  const offsets: number[] = [];
+  objs.forEach((o, i) => {
+    offsets.push(out.length);
+    out += `${i + 1} 0 obj\n${o}\nendobj\n`;
+  });
+  const xref = out.length;
+  out += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n`;
+  out += offsets.map((o) => `${String(o).padStart(10, "0")} 00000 n \n`).join("");
+  out += `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return Buffer.from(out, "latin1");
+}
+
+test("view_image shrinks an image and shows it after the step's results; read_pdf reads text and renders the rest", async () => {
+  const { createCanvas } = await import("@napi-rs/canvas");
+  const { five, model, cfg } = make([
+    {
+      calls: [
+        ["view_image", { path: "photo.png" }],
+        ["view_image", { path: "notes.txt" }],
+        ["read_pdf", { path: "doc.pdf" }],
+      ],
+    },
+    { content: "a red picture and a document" },
+  ]);
+  const canvas = createCanvas(2000, 1000);
+  const g = canvas.getContext("2d");
+  g.fillStyle = "#c00";
+  g.fillRect(0, 0, 2000, 1000);
+  fs.writeFileSync(path.join(cfg.workspace, "photo.png"), await canvas.encode("png"));
+  fs.writeFileSync(path.join(cfg.workspace, "notes.txt"), "not an image");
+  fs.writeFileSync(path.join(cfg.workspace, "doc.pdf"), twoPagePdf());
+
+  await turn(five);
+  const sent = model.requests[1] ?? [];
+  const results = sent.filter((m) => m.role === "tool").map((m) => m.content);
+  assert.match(results[0] ?? "", /^attached results\/images\/photo-\w+\.jpg \(1024×512, shrunk from 2000×1000\)/);
+  assert.match(results[1] ?? "", /^error: .*not an image/);
+  assert.match(results[2] ?? "", /^doc\.pdf: 2 pages; pages 1–2 follow\./);
+  assert.match(results[2] ?? "", /--- page 1 ---\nHello from page one/);
+  assert.match(results[2] ?? "", /--- page 2 --- no text .*rendered as results\/images\/doc-p2\.png/);
+  assert.ok(fs.existsSync(path.join(cfg.workspace, "results/images/doc-p2.png")));
+
+  // After the tool results, a user message with the image; the call sends its bytes.
+  const shown = sent.at(-1);
+  assert.equal(shown?.role, "user");
+  const paths = shown && "images" in shown ? shown.images : undefined;
+  assert.equal(paths?.length, 1);
+  assert.match(paths?.[0] ?? "", /^results\/images\/photo-\w+\.jpg$/);
+  const data = model.images[1]?.[0];
+  assert.ok(
+    data &&
+      Buffer.from(data, "base64")
+        .subarray(0, 2)
+        .equals(Buffer.from([0xff, 0xd8])),
+    "a JPEG",
+  );
 });

@@ -294,11 +294,14 @@ export function createApi(opts: ApiOptions): http.Server {
   route("GET", "/api/v1/workspace/files", ({ query }) => workspace.list(wsPath(query)));
   route("GET", "/api/v1/workspace/file", ({ query }) => {
     const { entry, bytes } = workspace.read(wsPath(query));
+    const shown = SHOWN[path.extname(entry.name).toLowerCase()];
     return new Raw(
       {
-        // Bytes a browser does not run: an HTML file the agent wrote cannot act on the UI's origin.
-        "content-type": "application/octet-stream",
-        "content-security-policy": "sandbox",
+        // Bytes a browser does not run: an HTML file the agent wrote cannot act on the UI's origin. An
+        // image or a PDF has its own type, to show in the UI; the sandbox stays but on a PDF, which a
+        // browser's viewer refuses to open sandboxed.
+        "content-type": shown ?? "application/octet-stream",
+        ...(shown !== "application/pdf" && { "content-security-policy": "sandbox" }),
         etag: `"${entry.version}"`,
         "last-modified": new Date(entry.modified).toUTCString(),
         ...(query.get("download") === "true" && {
@@ -439,6 +442,17 @@ const TYPES: Record<string, string> = {
 };
 
 /** A file of the built UI, or index.html for any other path (the UI routes in the browser). */
+/** Workspace files served as what they are, to show in the UI; SVG is not one, as it can hold script. */
+const SHOWN: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".bmp": "image/bmp",
+  ".pdf": "application/pdf",
+};
+
 function serveWeb(dir: string | undefined, pathname: string, res: http.ServerResponse): void {
   if (!dir || !fs.existsSync(path.join(dir, "index.html"))) {
     res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });

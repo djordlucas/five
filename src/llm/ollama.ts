@@ -21,7 +21,7 @@ export interface OllamaOptions {
 export const OLLAMA_ENDPOINT = "http://localhost:11434";
 
 type OllamaMessage =
-  | { role: "system" | "user" | "assistant"; content: string; tool_calls?: OllamaToolCall[] }
+  | { role: "system" | "user" | "assistant"; content: string; tool_calls?: OllamaToolCall[]; images?: string[] }
   | { role: "tool"; content: string; tool_name: string };
 
 interface OllamaToolCall {
@@ -64,11 +64,12 @@ export class Ollama implements ChatModel {
     maxTokens,
     signal,
     log = noopLogger,
+    image,
   }: CompletionRequest): Promise<Completion> {
     const think = (await this.canThink()) ? this.opts.think : undefined;
     const body = JSON.stringify({
       model: this.opts.model,
-      messages: messages.map(toOllama),
+      messages: messages.map((m) => toOllama(m, image)),
       ...(tools.length > 0 && { tools: tools.map((t) => ({ type: "function", function: t })) }),
       // Streamed: a non-streamed reply sends nothing until it is complete, and
       // Node's fetch gives up on a response whose headers take over 300 s —
@@ -187,7 +188,7 @@ function merge(body: string): RawChat {
   return out;
 }
 
-function toOllama(m: Message): OllamaMessage {
+function toOllama(m: Message, image?: (path: string) => string | undefined): OllamaMessage {
   switch (m.role) {
     case "tool":
       return { role: "tool", content: m.content, tool_name: m.name };
@@ -201,8 +202,17 @@ function toOllama(m: Message): OllamaMessage {
           })),
         }),
       };
-    default:
-      return { role: m.role, content: m.content };
+    default: {
+      if (!m.images?.length) return { role: m.role, content: m.content };
+      // Images go as base64; one deleted since is named in the text instead.
+      const data = m.images.map((p) => image?.(p));
+      const gone = m.images.filter((_, i) => data[i] === undefined);
+      return {
+        role: m.role,
+        content: gone.length ? `${m.content}\n[five: no longer in the workspace: ${gone.join(", ")}]` : m.content,
+        images: data.filter((d): d is string => d !== undefined),
+      };
+    }
   }
 }
 

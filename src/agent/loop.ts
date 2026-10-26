@@ -24,6 +24,7 @@ import { checkArgs, coerceArgs, parseArgs } from "./args.ts";
 import { awaitRun, type BuiltinContext, builtins, disabledError, formatRun, startGenerated } from "./builtins/index.ts";
 import { sleep } from "./builtins/shared.ts";
 import { type ContextEnv, contextTools, contextToolsByName } from "./context.ts";
+import { imageData, mediaTools, mediaToolsByName } from "./media.ts";
 import { SEED_PROMPT, seedSystemPrompt } from "./prompt.ts";
 import type { RunTable } from "./runs.ts";
 import { Supervisor, type SupervisorSettings } from "./supervisor.ts";
@@ -65,6 +66,8 @@ export class Loop {
   /** Why the supervisor wants the loop paused after the turn that ended, if it does. */
   private pauseFor?: string;
   private retryAt: number | null = null;
+  /** Images view_image attached in this step, shown after its results. */
+  private attached: string[] = [];
   private abort?: AbortController;
   /** Interrupts the wait between turns. */
   private wait?: AbortController;
@@ -290,6 +293,7 @@ export class Loop {
           tools,
           signal: this.abort.signal,
           log: stepLog,
+          image: (p) => imageData(this.o.workspace, p),
         });
         const durationMs = Math.round(performance.now() - t0);
         this.promptTokens = completion.usage?.prompt_tokens ?? this.promptTokens;
@@ -327,6 +331,7 @@ export class Loop {
         if (message.tool_calls.some((c) => this.supervisor.isWork(c))) worked = true;
         let end = false;
         let summary: string | undefined;
+        this.attached = [];
         for (const call of message.tool_calls) {
           const t1 = performance.now();
           const raw = await this.dispatch(call, stepLog, (s) => {
@@ -346,6 +351,16 @@ export class Loop {
             ok: !isFailure(result),
             durationMs: Math.round(performance.now() - t1),
           });
+        }
+        // Images view_image asked for come after the results: a tool message carries no image.
+        if (this.attached.length) {
+          const paths = this.attached;
+          ctx.messages.push({
+            role: "user",
+            content: `[five] ${paths.length === 1 ? "The image" : "The images"} view_image attached: ${paths.join(", ")}`,
+            images: paths,
+          });
+          this.save();
         }
         if (end) {
           reason = "end_turn";
@@ -398,6 +413,7 @@ export class Loop {
     const def = ({ name, description, parameters }: ToolDef) => ({ name, description, parameters });
     return [
       ...contextTools.map(def),
+      ...mediaTools.map(def),
       ...[...builtins().values()].map(def),
       ...this.o.store
         .list()
@@ -415,15 +431,23 @@ export class Loop {
     try {
       const parsed = parseArgs(raw ?? "");
       const own = contextToolsByName.get(name);
-      const builtin = own ? undefined : builtins().get(name);
-      const generated = own || builtin ? undefined : this.o.store.get(name);
-      const schema = (own ?? builtin)?.parameters ?? generated?.meta.parameters;
+      const media = own ? undefined : mediaToolsByName.get(name);
+      const builtin = own || media ? undefined : builtins().get(name);
+      const generated = own || media || builtin ? undefined : this.o.store.get(name);
+      const schema = (own ?? media ?? builtin)?.parameters ?? generated?.meta.parameters;
       const args = parsed.ok ? coerceArgs(schema, parsed.args) : {};
       const bad = !parsed.ok ? parsed.error : schema ? checkArgs(schema, args) : undefined;
       if (bad) result = `error: ${name}: ${bad}`;
       else if (own) {
         kind = "context";
         result = own.run(args, this.contextEnv(endTurn));
+      } else if (media) {
+        kind = "builtin";
+        result = await media.run(args, {
+          workspace: this.o.workspace,
+          imageSide: this.supervisor.settings.imageSide,
+          attachImage: (p) => this.attached.push(p),
+        });
       } else if (builtin) {
         kind = "builtin";
         result = await builtin.run(args, this.builtinContext(log));

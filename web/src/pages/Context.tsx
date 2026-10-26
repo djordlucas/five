@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'preact/hooks';
 import { type ContextView, del, get, type Message, message, post, put } from '../api/client';
 import { Code } from '../code';
+import { fileHref, rawUrl } from '../workspace';
 import { Icon } from '../components/Icon';
 import type { IconName } from '../sections';
 import { prettyArgs } from '../format';
@@ -222,6 +223,15 @@ function MessageRow(props: {
       ) : (
         m.content && <Code class={styles.content} text={m.content} />
       )}
+      {m.role === 'user' && m.images?.length ? (
+        <div class={styles.images}>
+          {m.images.map((p) => (
+            <a key={p} href={fileHref(p)} title={p}>
+              <img src={rawUrl(p)} alt={p} loading="lazy" />
+            </a>
+          ))}
+        </div>
+      ) : null}
       {calls.map((c) => (
         <details key={c.id} class={styles.call}>
           <summary>

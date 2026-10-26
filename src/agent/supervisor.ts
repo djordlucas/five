@@ -155,6 +155,15 @@ export const FIELDS: SupervisorField[] = [
     max: MAX_RESULT_CHARS,
     help: "A run's result longer than this is kept whole in results/, and the context gets its start and the file's path. 0: never; results are cut at 16,000.",
   },
+  {
+    key: "imageSide",
+    group: "Results",
+    label: "Images shrunk to",
+    unit: "px",
+    min: 256,
+    max: 2048,
+    help: "view_image shrinks an image to fit this many pixels a side before the model sees it: a bigger image costs more context.",
+  },
 ];
 
 /** The settings when the environment sets none. */
@@ -174,6 +183,7 @@ export const DEFAULTS: SupervisorSettings = {
   selfNoteChars: 1500,
   messagesPerTurn: 1,
   resultChars: 3000,
+  imageSide: 1024,
 };
 
 /** A next prompt that waits for someone: "Awaiting user request …", "Maintain standby mode …". */

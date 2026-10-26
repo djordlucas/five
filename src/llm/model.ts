@@ -33,6 +33,8 @@ export interface CompletionRequest {
   signal?: AbortSignal;
   /** The caller's logger (its turn and step), for this call's lines. */
   log?: Logger;
+  /** A message's image, by its workspace path, as base64; undefined when it is gone. */
+  image?: (path: string) => string | undefined;
 }
 
 export interface ChatModel {

@@ -373,3 +373,12 @@
 .inbox {
   color: var(--text);
 }
+
+.attached img {
+  display: block;
+  max-width: min(100%, 360px);
+  max-height: 240px;
+  margin: var(--space-2) 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}

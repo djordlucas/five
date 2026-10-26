@@ -19,7 +19,21 @@ import { Badge, Segments, ui } from '../components/ui';
 import { ago } from '../format';
 import type { IconName } from '../sections';
 import { status } from '../live';
-import { asText, bytes, cell, crumbs, dirHref, fieldValue, fileHref, join, MAX_EDIT_BYTES, parent, version } from '../workspace';
+import {
+  asText,
+  bytes,
+  cell,
+  crumbs,
+  dirHref,
+  fieldValue,
+  fileHref,
+  join,
+  MAX_EDIT_BYTES,
+  mediaOf,
+  parent,
+  rawUrl,
+  version,
+} from '../workspace';
 import styles from './Workspace.module.css';
 
 /**
@@ -240,7 +254,7 @@ function Files({ dir, changed, onChanged }: { dir: string; changed: number; onCh
             <li key={e.path}>
               <a href={k === 'dir' ? dirHref(e.path) : fileHref(e.path)} class={styles.fileCard} data-kind={k} title={e.name}>
                 <span class={styles.fileIcon}>
-                  <Icon name={k === 'dir' ? 'folder' : k === 'db' ? 'database' : 'file'} size={22} />
+                  <Icon name={k === 'dir' ? 'folder' : k === 'db' ? 'database' : mediaOf(e.name) === 'image' ? 'image' : 'file'} size={22} />
                 </span>
                 <span class={styles.fileName}>{e.name}</span>
                 <span class={styles.fileMeta} title={new Date(e.modified).toLocaleString()}>
@@ -394,6 +408,10 @@ function FileView(props: { path: string; file: Loaded; onChanged: () => void }) 
             }
           }}
         />
+      ) : mediaOf(path) === 'image' ? (
+        <img class={styles.media} src={`${rawUrl(path)}&v=${file.version ?? ''}`} alt={path} />
+      ) : mediaOf(path) === 'pdf' ? (
+        <iframe class={styles.pdf} src={`${rawUrl(path)}&v=${file.version ?? ''}`} title={path} />
       ) : (
         <p class="muted">
           {file.size > MAX_EDIT_BYTES ? `Over ${bytes(MAX_EDIT_BYTES)}, too large to edit here.` : 'Not a text file.'}{' '}

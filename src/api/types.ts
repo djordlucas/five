@@ -2,7 +2,12 @@
 // It imports nothing, so the browser build can compile it.
 
 export type Message =
-  | { role: "system" | "user"; content: string }
+  | {
+      role: "system" | "user";
+      content: string;
+      /** Workspace paths of images shown with this message (view_image); a model call sends their bytes. */
+      images?: string[];
+    }
   | { role: "assistant"; content: string | null; thinking?: string; tool_calls?: ToolCall[] }
   | { role: "tool"; tool_call_id: string; name: string; content: string };
 
@@ -241,6 +246,7 @@ export interface SupervisorSettings {
   selfNoteChars: number;
   messagesPerTurn: number;
   resultChars: number;
+  imageSide: number;
 }
 
 /** One setting, as the web UI shows it: a flag when its value is a boolean, else a whole number. */

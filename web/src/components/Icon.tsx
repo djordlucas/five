@@ -31,6 +31,7 @@ const paths: Record<IconName, string> = {
   database: 'M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3zM4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3',
   chat: 'M4 5h16v11H9l-5 4z',
   reset: 'M4 12a8 8 0 1 0 3-6.2M4 4v4h4',
+  image: 'M4 5h16v14H4zM4 16l5-5 4 4 3-3 4 4M15 9h.01',
 };
 
 export function Icon({ name, size = 22 }: { name: IconName; size?: number }) {
