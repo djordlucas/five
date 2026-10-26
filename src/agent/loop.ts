@@ -466,7 +466,7 @@ export class Loop {
       },
       endTurn,
       selfBlock: () => this.selfBlock(),
-      sendMessage: (text) => this.supervisor.sendMessage(this.ctx.turn, text),
+      sendMessage: (subject, text) => this.supervisor.sendMessage(this.ctx.turn, subject, text),
       checkNext: (text) => this.supervisor.checkNext(text, this.turnPrompt),
       checkSelfNote: (length) => this.supervisor.checkSelfNote(length),
     };

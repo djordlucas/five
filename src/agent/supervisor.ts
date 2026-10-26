@@ -371,15 +371,15 @@ export class Supervisor {
   }
 
   /** Put a message in the person's inbox, unless this turn sent its share. */
-  sendMessage(turn: number, text: string): string {
+  sendMessage(turn: number, subject: string, text: string): string {
     const max = this.settings.messagesPerTurn;
     if (max <= 0) return "error: messages to the person are off for now. Keep working.";
     if (this.messaged >= max) {
       return `error: you sent the person ${max === 1 ? "a message" : `${max} messages`} this turn already; ${max === 1 ? "one" : max} a turn. Keep working.`;
     }
     this.messaged++;
-    const m = this.o.state.addInbox(turn, "five", text);
-    this.o.emit({ type: "inbox", from: "five", text });
+    const m = this.o.state.addInbox(turn, "five", text, subject);
+    this.o.emit({ type: "inbox", from: "five", subject, text });
     this.o.log.info("message sent", { id: m.id });
     return "sent. The person reads the inbox now and then; a reply, if one comes, is put before the prompt of a later turn. Do not wait for it: go on with your work.";
   }

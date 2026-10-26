@@ -47,7 +47,7 @@ export type EventBody =
   | { type: "turn_ended"; reason: TurnEnd; next: string; error?: string }
   | { type: "context"; by: "model" | "user" | "five"; change: string }
   /** A message in the inbox: five's to the person, or the person's to five. */
-  | { type: "inbox"; from: InboxMessage["from"]; text: string }
+  | { type: "inbox"; from: InboxMessage["from"]; subject?: string; text: string }
   | { type: "loop"; state: "started" | "paused"; reason?: string }
   /** The supervisor's settings changed, from the API. */
   | { type: "supervisor"; change: string };
@@ -92,6 +92,8 @@ export interface InboxMessage {
   /** The turn it was sent in; for the person's, the turn running or last ended then. */
   turn: number;
   from: "five" | "person";
+  /** What it is about, in a few words: five's always have one. */
+  subject?: string;
   text: string;
   /** For the person's: the turn it was put before, once delivered. */
   deliveredTurn?: number;

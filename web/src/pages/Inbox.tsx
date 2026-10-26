@@ -93,6 +93,7 @@ export function Inbox() {
                 </span>
               )}
             </header>
+            {m.subject && <h2 class={styles.subject}>{m.subject}</h2>}
             <Markdown text={m.text} class={styles.body} />
           </li>
         ))}

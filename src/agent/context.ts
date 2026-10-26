@@ -4,7 +4,7 @@
 // what the agent deletes is gone — but for its memory: notes it saves as files
 // in <workspace>/memory, to read back in any later turn. One note, self, is
 // sent with every call in five's self block. message_person writes to the
-// inbox the person reads; it never waits for an answer.
+// inbox the person reads, with a subject; it never waits for an answer.
 
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -13,6 +13,9 @@ import type { Context } from "../state.ts";
 import { MEMORY_DIR, SELF_NOTE } from "./supervisor.ts";
 
 export { MEMORY_DIR, SELF_NOTE } from "./supervisor.ts";
+
+/** The longest subject of a message to the person. */
+const MAX_SUBJECT = 120;
 
 export interface ContextTool extends ToolDef {
   run(args: Record<string, unknown>, env: ContextEnv): string;
@@ -34,7 +37,7 @@ export interface ContextEnv {
   /** Five's self block, as the next model call will send it. */
   selfBlock(): string;
   /** Puts a message in the person's inbox; an error when this turn sent its share. */
-  sendMessage(text: string): string;
+  sendMessage(subject: string, text: string): string;
   /** Why a next prompt would waste the next turn, if it would. */
   checkNext(text: string): string | undefined;
   /** Why the self note may not be this long, if it may not. */
@@ -287,13 +290,20 @@ export const contextTools: ContextTool[] = [
       "does not wait: a reply, if one comes, is put before the prompt of a later turn. Keep working meanwhile.",
     parameters: {
       type: "object",
-      properties: { text: { type: "string", description: "The message, in a few lines." } },
-      required: ["text"],
+      properties: {
+        subject: { type: "string", description: `What the message is about, in a few words (at most ${MAX_SUBJECT}).` },
+        text: { type: "string", description: "The message, in a few lines." },
+      },
+      required: ["subject", "text"],
     },
     run(a, env) {
-      const text = String(a.text).trim();
+      const subject = String(a.subject ?? "").trim();
+      const text = String(a.text ?? "").trim();
+      if (!subject) return "error: give the message a subject: what it is about, in a few words";
+      if (subject.length > MAX_SUBJECT)
+        return `error: the subject is ${subject.length} characters; at most ${MAX_SUBJECT}`;
       if (!text) return "error: the message is empty";
-      return env.sendMessage(text);
+      return env.sendMessage(subject, text);
     },
   },
   {

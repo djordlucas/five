@@ -677,9 +677,12 @@ test("every call ends with five's self block, with the self note; the system pro
 });
 
 test("the inbox: one message a turn to the person, and their reply put before the next prompt", async () => {
-  const send = (text: string): [string, Record<string, unknown>] => ["message_person", { text }];
+  const send = (text: string): [string, Record<string, unknown>] => [
+    "message_person",
+    { subject: `About ${text}`, text },
+  ];
   const { five, cfg, model } = make([
-    { calls: [send("Found a map."), send("And another.")] },
+    { calls: [["message_person", { subject: " ", text: "No subject." }], send("Found a map."), send("And another.")] },
     { content: "a" },
     { content: "b" },
   ]);
@@ -690,13 +693,14 @@ test("the inbox: one message a turn to the person, and their reply put before th
   try {
     await turn(five);
     const results = model.requests[1]?.filter((m) => m.role === "tool").map((m) => m.content) ?? [];
-    assert.match(results[0] ?? "", /^sent\./);
-    assert.match(results[1] ?? "", /one a turn/);
+    assert.match(results[0] ?? "", /^error: give the message a subject/);
+    assert.match(results[1] ?? "", /^sent\./);
+    assert.match(results[2] ?? "", /one a turn/);
     const status = (await (await fetch(`${base}/status`)).json()) as Status;
     let page = (await (await fetch(`${base}/inbox`)).json()) as InboxPage;
     assert.deepEqual(
-      page.messages.map((m) => [m.from, m.text, m.turn]),
-      [["five", "Found a map.", 1]],
+      page.messages.map((m) => [m.from, m.subject, m.text, m.turn]),
+      [["five", "About Found a map.", "Found a map.", 1]],
     );
     assert.equal(status.inboxLast, page.messages[0]?.id);
 
@@ -727,7 +731,10 @@ test("the inbox: one message a turn to the person, and their reply put before th
 });
 
 test("the supervisor's settings change live through the API, outlive a restart, and reset", async () => {
-  const send = (text: string): [string, Record<string, unknown>] => ["message_person", { text }];
+  const send = (text: string): [string, Record<string, unknown>] => [
+    "message_person",
+    { subject: `About ${text}`, text },
+  ];
   const { five, cfg, model } = make([{ calls: [send("One."), send("Two."), send("Three.")] }, { content: "a" }]);
   const server = createApi({ five, cfg, log: (await import("../src/log.ts")).noopLogger });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));

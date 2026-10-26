@@ -91,7 +91,8 @@ CREATE TABLE IF NOT EXISTS inbox (
   turn INTEGER NOT NULL,
   sender TEXT NOT NULL CHECK (sender IN ('five', 'person')),
   text TEXT NOT NULL,
-  delivered_turn INTEGER
+  delivered_turn INTEGER,
+  subject TEXT
 );
 INSERT OR IGNORE INTO meta (key, value) VALUES ('run_seq', '0');
 `;
@@ -108,6 +109,9 @@ export class State {
     this.db = new DatabaseSync(this.path);
     this.db.exec("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;");
     this.db.exec(SCHEMA);
+    // An inbox from before subjects: add the column.
+    const cols = this.db.prepare("PRAGMA table_info(inbox)").all() as { name: string }[];
+    if (!cols.some((c) => c.name === "subject")) this.db.exec("ALTER TABLE inbox ADD COLUMN subject TEXT");
   }
 
   close(): void {
@@ -185,12 +189,12 @@ export class State {
 
   // ── inbox ─────────────────────────────────────────────────────────────────
 
-  addInbox(turn: number, from: InboxMessage["from"], text: string): InboxMessage {
+  addInbox(turn: number, from: InboxMessage["from"], text: string, subject?: string): InboxMessage {
     const at = now();
     const r = this.db
-      .prepare("INSERT INTO inbox (at, turn, sender, text) VALUES (?, ?, ?, ?)")
-      .run(at, turn, from, text);
-    return { id: Number(r.lastInsertRowid), at, turn, from, text };
+      .prepare("INSERT INTO inbox (at, turn, sender, text, subject) VALUES (?, ?, ?, ?, ?)")
+      .run(at, turn, from, text, subject ?? null);
+    return { id: Number(r.lastInsertRowid), at, turn, from, text, ...(subject !== undefined && { subject }) };
   }
 
   /** Newest first. */
@@ -308,6 +312,7 @@ function toInbox(r: unknown): InboxMessage {
     turn: Number(x.turn),
     from: x.sender as InboxMessage["from"],
     text: String(x.text),
+    ...(x.subject !== null && x.subject !== undefined && { subject: String(x.subject) }),
     ...(x.delivered_turn !== null && { deliveredTurn: Number(x.delivered_turn) }),
   };
 }

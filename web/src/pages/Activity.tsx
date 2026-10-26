@@ -229,7 +229,8 @@ function TurnView({ t }: { t: Turn }) {
               <p key={e.seq} class={`${styles.line} ${styles.inbox}`}>
                 <At iso={e.at} />
                 <Kind icon="inbox" />
-                {e.from === 'five' ? 'to you' : 'you wrote'}: {oneLine(e.text, 240)} ·{' '}
+                {e.from === 'five' ? 'to you' : 'you wrote'}: {e.subject && <strong>{e.subject} — </strong>}
+                {oneLine(e.text, 240)} ·{' '}
                 <a href="/inbox">inbox</a>
               </p>
             );
