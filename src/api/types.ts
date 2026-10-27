@@ -17,8 +17,14 @@ export interface ToolCall {
   function: { name: string; arguments: string };
 }
 
-/** Why a turn ended: the model replied without a call, called end_turn, ran out of steps, was stopped, or failed. */
-export type TurnEnd = "replied" | "end_turn" | "max_steps" | "stopped" | "error";
+/**
+ * Why a turn ended: the model replied without a call, called end_turn, ran out of steps, was stopped, failed,
+ * or a chat ended while the loop was paused.
+ */
+export type TurnEnd = "replied" | "end_turn" | "max_steps" | "stopped" | "error" | "chat";
+
+/** Why a chat ended: the person left it, did not answer in time, or the turn it was in ended. */
+export type ChatEnd = "left" | "timeout" | "turn_ended";
 
 export type EventBody =
   | {
@@ -35,6 +41,8 @@ export type EventBody =
       calls: { id: string; name: string; arguments: string }[];
       /** Calls recovered from the reply's text rather than sent as tool calls. */
       fromText?: boolean;
+      /** A reply to the person, in a chat. */
+      chat?: boolean;
       promptTokens?: number;
       completionTokens?: number;
       durationMs: number;
@@ -53,6 +61,9 @@ export type EventBody =
   | { type: "context"; by: "model" | "user" | "five"; change: string }
   /** A message in the inbox: five's to the person, or the person's to five. */
   | { type: "inbox"; from: InboxMessage["from"]; subject?: string; text: string; asPrompt?: boolean }
+  /** The person's chat message, as it joins the turn. */
+  | { type: "chat"; text: string }
+  | { type: "chat_ended"; reason: ChatEnd }
   | { type: "loop"; state: "started" | "paused"; reason?: string }
   /** The supervisor's settings changed, from the API. */
   | { type: "supervisor"; change: string };
@@ -72,6 +83,18 @@ export interface LoopStatus {
   retryAt: string | null;
   /** What the turn is doing right now: the model writing its reply, or a tool running. */
   live?: LiveWork;
+  /** The chat, while one is open or a message waits to join a turn. */
+  chat?: ChatStatus;
+}
+
+/** A chat with the person, inside a turn: the agent's replies go to the person, and the turn waits for theirs. */
+export interface ChatStatus {
+  /** The agent has the person's message: its replies go to them. */
+  open: boolean;
+  /** The turn waits for the person's next message, until then; it carries on without them after. */
+  waitingUntil?: string;
+  /** The person's messages sent but not yet in the context: they join the turn at its next step. */
+  queued: string[];
 }
 
 /** The step in progress, for the UI to show it as it happens. */
@@ -287,6 +310,7 @@ export interface SupervisorSettings {
   messagesPerTurn: number;
   resultChars: number;
   imageSide: number;
+  chatWaitSeconds: number;
 }
 
 /** One setting, as the web UI shows it: a flag when its value is a boolean, else a whole number. */

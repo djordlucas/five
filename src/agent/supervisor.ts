@@ -165,6 +165,15 @@ export const FIELDS: SupervisorField[] = [
     max: 2048,
     help: "view_image shrinks an image to fit this many pixels a side before the model sees it: a bigger image costs more context.",
   },
+  {
+    key: "chatWaitSeconds",
+    group: "Chat",
+    label: "Wait for the person",
+    unit: "seconds",
+    min: 10,
+    max: 3600,
+    help: "In a chat, after the agent answers, the turn waits this long for the person's next message; then the chat ends and the turn carries on.",
+  },
 ];
 
 /** The settings when the environment sets none. */
@@ -185,6 +194,7 @@ export const DEFAULTS: SupervisorSettings = {
   messagesPerTurn: 1,
   resultChars: 3000,
   imageSide: 1024,
+  chatWaitSeconds: 300,
 };
 
 /** A next prompt that waits for someone: "Awaiting user request …", "Maintain standby mode …". */
@@ -418,7 +428,7 @@ export class Supervisor {
    * change, and a block at the start would make it read the whole context
    * again on every call.
    */
-  selfBlock(ctx: Context, step: number, used: number | null): string | undefined {
+  selfBlock(ctx: Context, step: number, used: number | null, chatting = false): string | undefined {
     if (!this.settings.selfBlock) return undefined;
     const { contextTokens, state, store, workspace } = this.o;
     const born = state.getMeta("born");
@@ -443,6 +453,11 @@ export class Supervisor {
       ...(goal ? [`Your goal: ${clip(goal, 240)}`] : []),
       `Working memory — this context: ${used === null ? "not measured yet" : `${tokens(used)} of ${tokens(contextTokens)} tokens at the last call (${share(used, contextTokens)}%)`}, ${ctx.messages.length} messages.`,
       `Long-term memory: ${notes} note${notes === 1 ? "" : "s"} in ${MEMORY_DIR}/. Tools you built: ${tools.length ? clip(tools.join(", "), 300) : "none yet"}. Libraries: ${libraries.length ? clip(libraries.join(", "), 200) : "none yet"}.`,
+      ...(chatting
+        ? [
+            "You are in a live chat with the person: a reply without a tool call goes to them, and the turn waits for their answer. Call tools first when the answer needs them.",
+          ]
+        : []),
       `Inbox: ${inbox.sent} message${inbox.sent === 1 ? "" : "s"} sent to the person${inbox.lastSentTurn === null ? "" : `, the last on turn ${inbox.lastSentTurn}`}; ${inbox.received} from them${inbox.unread ? `, ${inbox.unread} unread: read_inbox shows ${inbox.unread === 1 ? "it" : "them"}` : ""}. read_inbox shows what was said.`,
       "",
       `## Your self note (${MEMORY_DIR}/${SELF_NOTE}.md)`,
@@ -454,21 +469,25 @@ export class Supervisor {
 
   // ── at a turn's end ───────────────────────────────────────────────────────
 
-  /** The agent ended the turn with end_turn: fold it into the summary, if one was given. */
-  endedWithSummary(ctx: Context, opening: Message, summary: string | undefined): void {
-    if (summary) this.fold(ctx, opening, summary);
+  /**
+   * The agent ended the turn with end_turn: fold it into the summary, if one
+   * was given. `chat` is the turn's chat with the person, kept through a fold.
+   */
+  endedWithSummary(ctx: Context, opening: Message, summary: string | undefined, chat?: string): void {
+    if (summary) this.fold(ctx, opening, summary, chat);
   }
 
   /**
    * The agent ended the turn with a reply: a small model often forgets
    * end_turn, so its last reply stands in for the summary. A turn that did no
    * work leaves nothing: its reply would only say what it meant to do, and a
-   * context full of those, alike, gets copied rather than acted on.
+   * context full of those, alike, gets copied rather than acted on. A turn
+   * with a chat is never dropped.
    */
-  endedWithReply(ctx: Context, opening: Message, reply: string | undefined, worked: boolean): void {
+  endedWithReply(ctx: Context, opening: Message, reply: string | undefined, worked: boolean, chat?: string): void {
     const { foldReplies, dropIdle, replySummaryChars } = this.settings;
-    if (!worked && dropIdle) this.drop(ctx, opening);
-    else if (foldReplies && reply) this.fold(ctx, opening, clip(reply, replySummaryChars));
+    if (!worked && !chat && dropIdle) this.drop(ctx, opening);
+    else if (foldReplies && reply) this.fold(ctx, opening, clip(reply, replySummaryChars), chat);
   }
 
   /** Count the turn that ended; the reason to pause the loop, if it should. */
@@ -485,12 +504,13 @@ export class Supervisor {
    * Replace the turn's messages, from its prompt on, with the agent's summary.
    * When the agent deleted its prompt, the turn's messages stay.
    */
-  private fold(ctx: Context, opening: Message, summary: string): void {
+  private fold(ctx: Context, opening: Message, summary: string, chat?: string): void {
     const { messages, turn } = ctx;
     const i = messages.indexOf(opening);
     if (i < 0) return;
     const n = messages.length - i;
-    messages.splice(i, n, { role: "assistant", content: `[Turn ${turn}, summarized] ${summary}` });
+    const talk = chat ? `\n\n[Your chat with the person in turn ${turn}]\n${chat}` : "";
+    messages.splice(i, n, { role: "assistant", content: `[Turn ${turn}, summarized] ${summary}${talk}` });
     this.o.emit({ type: "context", by: "model", change: `turn ${turn}'s ${n} messages replaced by its summary` });
     this.o.log.info("turn folded", { turn, messages: n });
   }

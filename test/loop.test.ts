@@ -1147,3 +1147,113 @@ test("read_inbox shows both sides, reads a message sent during the turn, and the
   await turn(five);
   assert.equal(requests[4]?.at(-2)?.content, SEED_PROMPT);
 });
+
+/** Wait until a condition holds, checking every few milliseconds. */
+async function until(ok: () => boolean, what: string): Promise<void> {
+  const t0 = Date.now();
+  while (!ok()) {
+    if (Date.now() - t0 > 5000) throw new Error(`timed out waiting for ${what}`);
+    await new Promise((r) => setTimeout(r, 5));
+  }
+}
+
+test("a chat while paused runs a turn: replies go to the person, the turn waits, and leaving ends it", async () => {
+  const { five, model, cfg } = make(
+    [
+      { content: "Hello! I follow the news." },
+      { calls: [["memory_read", {}]] },
+      { content: "Yes: I will look at Asia next." },
+    ],
+    { FIVE_FOLD_REPLIES: "on" },
+  );
+  const server = createApi({ five, cfg, log: (await import("../src/log.ts")).noopLogger });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  const post = (url: string, body?: unknown) =>
+    fetch(`${base}${url}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      ...(body !== undefined && { body: JSON.stringify(body) }),
+    });
+  try {
+    assert.equal((await post("/api/v1/chat", { text: " " })).status, 400);
+    assert.equal((await post("/api/v1/chat/leave")).status, 409);
+
+    assert.equal((await post("/api/v1/chat", { text: "What are you doing?" })).status, 200);
+    await until(() => five.loop.status().chat?.waitingUntil !== undefined, "the first answer");
+    const first = model.requests[0] ?? [];
+    assert.match(
+      String(first.at(-1)?.content),
+      /^\[The person, live in a chat: they wait for your answer\] What are you doing\?/,
+    );
+    assert.match(model.selves[0] ?? "", /You are in a live chat with the person/);
+    assert.equal(five.loop.status().chat?.open, true);
+
+    five.loop.chat("Can you cover Asia?");
+    await until(
+      () => model.requests.length === 3 && five.loop.status().chat?.waitingUntil !== undefined,
+      "the second answer",
+    );
+    assert.equal(model.requests[1]?.at(-1)?.content, "[The person, in the chat] Can you cover Asia?");
+
+    assert.equal((await post("/api/v1/chat/leave")).status, 200);
+    await until(() => !five.loop.status().busy, "the turn's end");
+    assert.equal(five.loop.status().chat, undefined);
+    assert.equal(model.requests.length, 3, "a paused loop's turn ends when the chat does");
+
+    const events = five.state
+      .eventsAfter(0, 1000)
+      .filter(
+        (e) =>
+          e.type === "chat" || e.type === "chat_ended" || e.type === "turn_ended" || (e.type === "model" && e.chat),
+      );
+    assert.deepEqual(
+      events.map((e) =>
+        e.type === "turn_ended" ? `ended:${e.reason}` : e.type === "chat_ended" ? `left:${e.reason}` : e.type,
+      ),
+      ["chat", "model", "chat", "model", "left:left", "ended:chat"],
+    );
+    // The fold keeps what was said.
+    const kept = String(five.loop.ctx.messages.at(-1)?.content);
+    assert.match(
+      kept,
+      /\[Your chat with the person in turn 1\]\nThe person: What are you doing\?\nYou: Hello! I follow the news\.\nThe person: Can you cover Asia\?\nYou: Yes: I will look at Asia next\./,
+    );
+  } finally {
+    server.close();
+  }
+});
+
+test("a chat joins a running turn at its next step, and the turn's work carries on when the person leaves", async () => {
+  const { five, model } = make([
+    { calls: [["memory_read", {}]] },
+    { content: "Hi, I am reading my notes." },
+    { calls: [["end_turn", { summary: "Read my notes and chatted.", next: "Read the BBC feed." }]] },
+  ]);
+  const real = model.complete.bind(model);
+  let chatted = false;
+  model.complete = async (req) => {
+    const r = await real(req);
+    if (!chatted) {
+      chatted = true;
+      five.loop.chat("hello");
+    }
+    return r;
+  };
+  five.loop.start();
+  await until(() => five.loop.status().chat?.waitingUntil !== undefined, "the answer");
+  assert.equal(model.requests[1]?.at(-1)?.role, "user");
+  assert.match(String(model.requests[1]?.at(-1)?.content), /\] hello/);
+  five.loop.pause();
+  five.loop.start();
+  five.loop.leaveChat();
+  await until(() => five.loop.ctx.next === "Read the BBC feed.", "the turn's end");
+  five.loop.pause();
+  await until(() => !five.loop.status().busy, "the loop to stop");
+  assert.match(
+    String(model.requests[2]?.at(-1)?.content),
+    /^\[five\] The person left the chat\. Carry on with this turn's work\./,
+  );
+  const ended = five.state.eventsAfter(0, 1000).find((e) => e.type === "turn_ended");
+  assert.equal(ended?.type === "turn_ended" && ended.reason, "end_turn");
+});
