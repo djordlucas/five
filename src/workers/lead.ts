@@ -8,6 +8,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { asDeps, depsSchema } from "../agent/builtins/shared.ts";
+import type { Message } from "../llm/model.ts";
 import type { AgentTool } from "./agent.ts";
 import { RESULTS_DIR, runAgent } from "./agent.ts";
 import { clip } from "./board.ts";
@@ -40,15 +41,30 @@ How five works:
 
 Each run: read the results, decide what comes next — pick what to follow from what the workers found (the board's results, the files), never from memory: a follow-up on a story the workers found, a question its results leave open — post tasks for your workers, write a new worker only for work none of them does, update your notes, and message the person (message_person) only when something matters to them. Then reply with one line: what you did.`;
 
+const NOTES_REMINDER = `[five] You did not update your notes, ${NOTES}: your next run knows only what they say. Write them now with write_file (replace: true) — what you learned this run, what works, what to do next, a few lines — then reply with one line.`;
+
+/** Whether a file changed after `t`. */
+function changedAfter(file: string, t: number): boolean {
+  try {
+    return fs.statSync(file).mtimeMs >= t;
+  } catch {
+    return false;
+  }
+}
+
 /** The lead's run: its prompt, built now, and its tools. */
 export async function runLead(d: Deps, run: Run, more: { chat?: string }): Promise<string> {
   const prompt = leadPrompt(d, run, more);
   run.emit({ type: "run_started", worker: "lead", kind: "lead", prompt });
-  const r = await runAgent(d, run, {
-    system: LEAD_SYSTEM,
-    messages: [{ role: "user", content: prompt }],
-    tools: leadTools(d),
-  });
+  const t0 = Date.now();
+  const messages: Message[] = [{ role: "user", content: prompt }];
+  const tools = leadTools(d);
+  let r = await runAgent(d, run, { system: LEAD_SYSTEM, messages, tools });
+  // Its notes are all it knows next run: a run that kept none is reminded, once.
+  if (r.outcome === "done" && !changedAfter(path.join(d.workspace, NOTES), t0)) {
+    messages.push({ role: "user", content: NOTES_REMINDER });
+    r = await runAgent(d, run, { system: LEAD_SYSTEM, messages, tools, maxSteps: 3 });
+  }
   return r.outcome === "done" ? r.text : `${r.outcome === "budget" ? "out of context" : "out of steps"}: ${r.text}`;
 }
 

@@ -638,7 +638,7 @@ test("the lead posts a task; the research worker does it through five.llm.agent,
   const site = http.createServer((_req, res) => {
     res.setHeader("content-type", "text/html");
     res.end(
-      "<html><body><p>X is the twenty-fourth letter of the Latin alphabet, used in many languages.</p><p>In English it is pronounced like ks, as in the word box.</p></body></html>",
+      "<html><body><p>X is the twenty-fourth letter of the Latin alphabet, used in many languages.</p><p>In English it is pronounced like ks, as in the word box.</p><p>Of the letters in English text, about 0.15 percent are an X.</p></body></html>",
     );
   });
   await new Promise<void>((r) => site.listen(0, "127.0.0.1", r));
@@ -669,6 +669,9 @@ test("the lead posts a task; the research worker does it through five.llm.agent,
               url: "https://elsewhere.invalid/x",
               quote: "In English it is pronounced like ks, as in the word box.",
             },
+            // In other words than the page's: kept with the page's sentence, when its words and numbers are there.
+            { fact: "X is about 0.15 percent of the letters in English text.", url, quote: "X makes up 0.15%." },
+            { fact: "X is about 3 percent of the letters in English text.", url, quote: "X makes up 3%." },
             // Said twice: kept once.
             { fact: "X is a letter.", url, quote: "X is the twenty-fourth letter of the Latin alphabet" },
           ],
@@ -690,13 +693,13 @@ test("the lead posts a task; the research worker does it through five.llm.agent,
   assert.deepEqual([task.worker, task.status, task.postedBy], ["research", "done", "lead"]);
   assert.match(
     task.result ?? "",
-    /^2 checked facts added to news\/stories\/letter-x\.md \(story: letter-x\)\. 1 dropped/,
+    /^3 checked facts added to news\/stories\/letter-x\.md \(story: letter-x\)\. 2 dropped/,
   );
   const day = new Date().toISOString().slice(0, 10);
   const story = fs.readFileSync(path.join(cfg.workspace, "news/stories/letter-x.md"), "utf8");
   assert.equal(
     story,
-    `# Find what X is\n\n## ${day}\n\n- X is the 24th letter. ([source](${url}): “X is the twenty-fourth letter of the Latin alphabet”)\n- X sounds like ks. ([source](${url}): “In English it is pronounced like ks, as in the word box.”)\n- Watch: Whether Y follows.\n`,
+    `# Find what X is\n\n## ${day}\n\n- X is the 24th letter. ([source](${url}): “X is the twenty-fourth letter of the Latin alphabet”)\n- X sounds like ks. ([source](${url}): “In English it is pronounced like ks, as in the word box.”)\n- X is about 0.15 percent of the letters in English text. ([source](${url}): “Of the letters in English text, about 0.15 percent are an X.”)\n- Watch: Whether Y follows.\n`,
   );
   assert.match(
     fs.readFileSync(path.join(cfg.workspace, "news/index.md"), "utf8"),
@@ -1005,10 +1008,12 @@ test("the lead plans on its own model when it has one; the workers use theirs", 
   await until(() => events(five).some((e) => e.type === "run_ended"), "the lead's run");
   five.five.pause();
   await agent(five);
+  // Its run, and the reminder to keep its notes: it kept none.
   assert.deepEqual(
     [lead.requests.length, system({ messages: lead.requests[0] ?? [] }).startsWith("You are the lead")],
-    [1, true],
+    [2, true],
   );
+  assert.match(String(lead.requests[1]?.at(-1)?.content), /^\[five\] You did not update your notes/);
   assert.deepEqual(
     workers.requests.map((r) => system({ messages: r })),
     ["You are a test."],

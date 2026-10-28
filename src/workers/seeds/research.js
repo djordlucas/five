@@ -1,12 +1,22 @@
 // One story, researched. A small agent searches and reads, and reports each
-// fact with a sentence copied from its page; code keeps only the facts whose
-// sentence is in what the agent read — the page it names first, then any other
-// it read, which then becomes the fact's source — and adds them to the story's
-// file under today's date. The model finds and words; code checks and writes.
+// fact with a sentence from its page. Code keeps only the facts it finds in
+// what the agent read — the sentence as quoted, or else the page's own sentence
+// that says the fact: most of its words and every number — the page it names
+// first, then any other it read, which then becomes the fact's source. It adds
+// them to the story's file under today's date, each with the page's sentence.
+// The model finds and words; code checks and writes.
 const STORIES = "news/stories";
 const INDEX = "news/index.md";
 /** Words in a row a quote must share with its page, when it is not there whole. */
 const RUN = 8;
+/** The share of a fact's words its page's sentence must have, besides every number. */
+const SAYS = 0.6;
+/** Words that say little on their own. */
+const SMALL = new Set(
+  "the and for with from that this was were are has have had its their they them than then into over after before about also been being but not more most said says will would could should which who what when where while there these those other some such only just".split(
+    " ",
+  ),
+);
 
 /** A URL as a key: with or without www, a slash at the end or a fragment. */
 const key = (url) =>
@@ -32,6 +42,39 @@ function onPage(page, quote) {
   const words = q.split(" ");
   for (let i = 0; i + RUN <= words.length; i++) if (page.includes(words.slice(i, i + RUN).join(" "))) return true;
   return false;
+}
+
+const words = (s) =>
+  norm(s)
+    .match(/[a-z]{3,}/g)
+    ?.filter((w) => !SMALL.has(w)) ?? [];
+const numbers = (s) => (String(s).match(/\d[\d,.]*/g) ?? []).map((n) => n.replace(/[,.]+$/, "").replace(/,/g, ""));
+
+/** A page's sentences, and each sentence with the next: a fact may take two. */
+function sentences(text) {
+  const all = String(text)
+    .split(/(?<=[.!?])\s+|\n+/)
+    .map((t) => t.replace(/\s+/g, " ").trim())
+    .filter((t) => t.length >= 20 && t.length <= 600);
+  return [...all, ...all.slice(0, -1).map((t, i) => `${t} ${all[i + 1]}`)];
+}
+
+/** The page's sentence that says the claim: most of its words and every number; undefined when none. */
+function saying(page, claim) {
+  const want = [...new Set(words(claim))];
+  const nums = numbers(claim);
+  if (want.length < 3) return undefined;
+  let best;
+  for (const s of page.sentences) {
+    const has = new Set(words(s));
+    const shared = want.filter((w) => has.has(w)).length;
+    if (shared / want.length < SAYS) continue;
+    const theirs = numbers(s);
+    if (!nums.every((n) => theirs.includes(n))) continue;
+    // The shortest of the best: a sentence, not a paragraph.
+    if (!best || shared > best.shared || (shared === best.shared && s.length < best.s.length)) best = { s, shared };
+  }
+  return best?.s;
 }
 
 const SYSTEM =
@@ -115,7 +158,12 @@ export default async ({ task }) => {
   );
 
   // What the agent read, the page each fact names first; the page fetched again when the agent read none of it.
-  const read = (await five.web.read()).map((r) => ({ url: r.url, key: key(r.url), text: norm(r.text) }));
+  const read = (await five.web.read()).map((r) => ({
+    url: r.url,
+    key: key(r.url),
+    text: norm(r.text),
+    sentences: sentences(r.text),
+  }));
   const fetched = new Map();
   const kept = [];
   // The story's file has some already, from an earlier run.
@@ -125,21 +173,32 @@ export default async ({ task }) => {
   let known = 0;
   for (const f of out.facts ?? []) {
     const named = key(f.url ?? "");
-    let source = [...read.filter((r) => r.key === named), ...read.filter((r) => r.key !== named)].find((r) =>
-      onPage(r.text, f.quote),
-    )?.url;
-    if (!source && /^https?:\/\//.test(f.url ?? "") && !read.some((r) => r.key === named)) {
-      if (!fetched.has(named)) fetched.set(named, await five.web.text(f.url).then(norm, () => ""));
-      if (onPage(fetched.get(named), f.quote)) source = f.url;
+    if (!read.some((r) => r.key === named) && /^https?:\/\//.test(f.url ?? "") && !fetched.has(named)) {
+      // A page the agent did not read itself: fetched now, to check against.
+      const text = await five.web.text(f.url).catch(() => "");
+      fetched.set(named, { url: f.url, key: named, text: norm(text), sentences: sentences(text) });
     }
-    if (source && had.includes(norm(f.quote))) known++;
-    else if (source && !quotes.has(norm(f.quote))) {
-      quotes.add(norm(f.quote));
-      kept.push({ ...f, url: source });
-    } else if (!source) dropped++;
+    const pages = [...read, ...fetched.values()];
+    const order = [...pages.filter((r) => r.key === named), ...pages.filter((r) => r.key !== named)];
+    // The quote as given, or the page's own sentence that says the fact.
+    let found;
+    for (const page of order) {
+      if (onPage(page.text, f.quote)) found = { url: page.url, quote: f.quote };
+      else {
+        const s = saying(page, f.fact) ?? saying(page, f.quote);
+        if (s) found = { url: page.url, quote: s };
+      }
+      if (found) break;
+    }
+    if (!found) dropped++;
+    else if (had.includes(norm(found.quote))) known++;
+    else if (!quotes.has(norm(found.quote))) {
+      quotes.add(norm(found.quote));
+      kept.push({ ...f, ...found });
+    }
   }
   const why = [
-    dropped && ` ${dropped} dropped: their sentence is in nothing the agent read.`,
+    dropped && ` ${dropped} dropped: nothing the agent read says them.`,
     known && ` ${known} already in the story.`,
   ]
     .filter(Boolean)
