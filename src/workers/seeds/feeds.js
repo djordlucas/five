@@ -7,12 +7,31 @@ const DEFAULT_FEEDS = [
   "https://feeds.npr.org/1004/rss.xml",
 ];
 const SEEN = "news/seen.json";
+const LOCK = "news/.feeds.lock";
 const BATCH = 15;
+/** A lock older than this was left by a run that died. */
+const STALE_MS = 15 * 60_000;
 
+// One feeds run at a time: two would take the same new items, and add each twice.
 export default async ({ task }) => {
+  fs.mkdirSync("news", { recursive: true });
+  try {
+    fs.writeFileSync(LOCK, String(Date.now()), { flag: "wx" });
+  } catch {
+    if (Date.now() - fs.statSync(LOCK).mtimeMs < STALE_MS)
+      return "Another feeds run is reading the feeds right now, so this one did nothing. One feeds task at a time is enough.";
+    fs.writeFileSync(LOCK, String(Date.now()));
+  }
+  try {
+    return await digest(task);
+  } finally {
+    fs.rmSync(LOCK, { force: true });
+  }
+};
+
+async function digest(task) {
   // URLs in any form: one per line, or joined with commas or semicolons.
   const given = [...new Set(task.input.match(/https?:\/\/[^\s,;<>"'()[\]]+/g) ?? [])];
-  fs.mkdirSync("news", { recursive: true });
   const seen = new Set(fs.existsSync(SEEN) ? JSON.parse(fs.readFileSync(SEEN, "utf8")) : []);
   const fresh = [];
   const failed = [];
@@ -87,4 +106,4 @@ export default async ({ task }) => {
     .map((p) => `\n- ${p.line}`)
     .join("");
   return `${fresh.length} new items; ${picked.length} added to ${file}.${said}${top ? `\nTop of them:${top}` : ""}`;
-};
+}

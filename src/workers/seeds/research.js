@@ -61,6 +61,16 @@ export default async ({ task }) => {
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-+|-+$/g, "")
       .slice(0, 60) || "other";
+  // A new slug much like one followed already is that story: reuse its file.
+  if (!stories.includes(slug)) {
+    const words = new Set(slug.split("-"));
+    const like = stories.find((s) => {
+      const theirs = s.split("-");
+      const shared = theirs.filter((w) => words.has(w)).length;
+      return shared >= 2 && shared / Math.min(words.size, theirs.length) >= 0.6;
+    });
+    if (like) slug = like;
+  }
   const file = `${STORIES}/${slug}.md`;
   const before = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
 

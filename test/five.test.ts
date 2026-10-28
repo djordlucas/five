@@ -761,6 +761,15 @@ test("define_worker: tried on a trial task first, refused for five's own workers
                 test_input: "x",
               },
             ],
+            [
+              "define_worker",
+              {
+                name: "oops",
+                description: "Fails.",
+                code: 'export default async () => ({ error: "ENOENT: no such file, news/x.md" })',
+                test_input: "x",
+              },
+            ],
             ["define_worker", { name: "fifth", description: "Talks.", code: said, test_input: "x" }],
             ["define_worker", { name: "sixth", description: "Talks.", code: said, test_input: "x" }],
           ],
@@ -790,8 +799,9 @@ test("define_worker: tried on a trial task first, refused for five's own workers
   assert.match(results[4] ?? "", /^not saved: count works — 0 tasks done, none of its latest failed/);
   assert.match(results[5] ?? "", /^not saved: the trial failed\nthe worker returned nothing/);
   assert.match(results[6] ?? "", /^not saved: the trial failed\nthe worker's result says nothing \(\{/);
-  assert.match(results[7] ?? "", /^saved worker fifth/);
-  assert.match(results[8] ?? "", /^not saved: five keeps at most 4 task workers — count \(1 done/);
+  assert.match(results[7] ?? "", /^not saved: the trial failed\nthe worker returned an error: ENOENT/);
+  assert.match(results[8] ?? "", /^saved worker fifth/);
+  assert.match(results[9] ?? "", /^not saved: five keeps at most 4 task workers — count \(1 done/);
   assert.equal((five.five.board.list()[0] as Task).result, "counted 2 words, in count.txt");
   assert.equal(fs.readFileSync(path.join(cfg.workspace, "count.txt"), "utf8"), "2");
   const asked = events(five).find((e) => e.type === "model" && e.prompt);

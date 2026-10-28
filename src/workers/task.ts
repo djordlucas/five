@@ -67,6 +67,9 @@ export async function runWorker(
   const v = r.value;
   if (v === null || v === undefined || v === "")
     throw new Error("the worker returned nothing: its default export must return the task's result");
+  // A worker that caught its own error and returned it has failed all the same.
+  if (typeof v === "object" && "error" in v && v.error)
+    throw new Error(`the worker returned an error: ${clip(String(v.error), 500)}`);
   const text = typeof v === "string" ? v : JSON.stringify(v, null, 2);
   // A placeholder — {"done": true}, "ok" — is no result: say what was done, and where.
   if ((text.match(/[A-Za-z]{2,}/g) ?? []).length < MIN_RESULT_WORDS)
