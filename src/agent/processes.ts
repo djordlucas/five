@@ -1,6 +1,6 @@
 // Every child process five starts — a run_js, a call of a tool the agent
 // built, a define_tool trial, a background run, a tool called from inside
-// another run — recorded as it starts, for the web UI to follow and kill.
+// another run, a task worker — recorded as it starts, for the web UI to follow and kill.
 // The runner is seven's and stays as it is: the table wraps it.
 
 import * as fs from "node:fs";
@@ -21,7 +21,7 @@ interface Proc {
   label: string;
   source: string;
   args: unknown;
-  turn: number;
+  run: number;
   step: number;
   handle: RunHandle;
   result?: RunResult;
@@ -31,10 +31,10 @@ interface Proc {
 export class ProcessTable {
   private readonly procs: Proc[] = [];
   private readonly home: string;
-  private readonly where: () => { turn: number; step: number };
+  private readonly where: () => { run: number; step: number };
 
-  /** where: the loop's turn and step, when a process starts. */
-  constructor(home: string, where: () => { turn: number; step: number }) {
+  /** where: the run and its step, when a process starts. */
+  constructor(home: string, where: () => { run: number; step: number }) {
     this.home = path.resolve(home);
     this.where = where;
   }
@@ -51,7 +51,12 @@ export class ProcessTable {
       },
       startEval: (source: string, opts: EvalOptions = {}) => {
         const handle = runner.startEval(source, opts);
-        this.add(handle, { kind: "code", label: "run_js", source, args: opts.args });
+        this.add(handle, {
+          kind: opts.label ? "worker" : "code",
+          label: opts.label ?? "run_js",
+          source,
+          args: opts.args,
+        });
         return handle;
       },
       runFile: (file: string, args?: unknown, timeoutMs?: number, log?: Logger) =>
@@ -117,7 +122,7 @@ export class ProcessTable {
       id: p.handle.id,
       kind: p.kind,
       label: p.label,
-      turn: p.turn,
+      run: p.run,
       step: p.step,
       startedAt: new Date(p.handle.startedAt).toISOString(),
       state: !r

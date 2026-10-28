@@ -4,5 +4,6 @@ web/node_modules
 web/dist
 .five
 workspace
+workspace-*
 .env
 *.log

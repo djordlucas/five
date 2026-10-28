@@ -1,4 +1,4 @@
-export type IconName = 'activity' | 'inbox' | 'folder' | 'monitor' | 'config' | 'play' | 'pause' | 'step' | 'stop' | 'alert' | 'flag' | 'edit' | 'person' | 'chip' | 'file' | 'context' | 'tool' | 'layers' | 'clock' | 'next' | 'plus' | 'upload' | 'download' | 'trash' | 'save' | 'search' | 'database' | 'chat' | 'reset' | 'image' | 'library' | 'send' | 'leave';
+export type IconName = 'activity' | 'inbox' | 'folder' | 'monitor' | 'config' | 'play' | 'pause' | 'step' | 'stop' | 'alert' | 'flag' | 'edit' | 'person' | 'chip' | 'file' | 'context' | 'tool' | 'layers' | 'clock' | 'next' | 'plus' | 'upload' | 'download' | 'trash' | 'save' | 'search' | 'database' | 'chat' | 'reset' | 'image' | 'library' | 'send' | 'leave' | 'board' | 'worker' | 'lead';
 
 export interface Section {
   path: string;
@@ -8,6 +8,7 @@ export interface Section {
 
 export const sections: Section[] = [
   { path: '/', label: 'Activity', icon: 'activity' },
+  { path: '/board', label: 'Board', icon: 'board' },
   { path: '/workspace', label: 'Workspace', icon: 'folder' },
   { path: '/inbox', label: 'Inbox', icon: 'inbox' },
   { path: '/config', label: 'Config', icon: 'config' },

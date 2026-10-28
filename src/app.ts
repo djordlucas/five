@@ -1,8 +1,8 @@
 // Wiring: one five, from configuration and a model client. main.ts uses it,
 // and so do tests, with a scripted model.
 
+import * as fs from "node:fs";
 import * as path from "node:path";
-import { Loop } from "./agent/loop.ts";
 import { ProcessTable } from "./agent/processes.ts";
 import { RunTable } from "./agent/runs.ts";
 import type { Config } from "./config.ts";
@@ -12,6 +12,9 @@ import { createRunner, llmModule, type RunHandle, type Runner, toolsModule } fro
 import { State } from "./state.ts";
 import { LibraryStore } from "./tools/libs.ts";
 import { ToolStore } from "./tools/store.ts";
+import { runScope } from "./workers/run.ts";
+import { Scheduler } from "./workers/scheduler.ts";
+import { AGENT_ID } from "./workers/tools.ts";
 
 export interface Five {
   state: State;
@@ -21,7 +24,10 @@ export interface Five {
   runs: RunTable;
   /** Every child process started since five started. */
   processes: ProcessTable;
-  loop: Loop;
+  /** The main loop: the workers, the board, the settings. */
+  five: Scheduler;
+  /** Start over; with `clean`, also delete the agent's tools, libraries and workspace files. */
+  reset(opts?: { clean?: boolean }): void;
   close(): Promise<void>;
 }
 
@@ -32,23 +38,36 @@ export function createFive(cfg: Config, model: ChatModel, log: Logger = noopLogg
   const store = new ToolStore(state, path.join(cfg.home, "tools"));
   const libs = new LibraryStore(state);
   const runnerLog = log.child({ component: "runner" });
-  // The loop is made below; a process only starts once it runs.
-  let loop: Loop | undefined;
-  const processes = new ProcessTable(cfg.home, () => ({ turn: loop?.ctx.turn ?? 0, step: loop?.status().step ?? 0 }));
+  // A process belongs to the run whose code started it.
+  const processes = new ProcessTable(cfg.home, () => {
+    const run = runScope.getStore();
+    return { run: run?.n ?? 0, step: run?.step ?? 0 };
+  });
+  // The model, for five.llm.chat in run_js: through the slots, like every call.
+  let scheduler: Scheduler | undefined;
+  const pooled: ChatModel = {
+    complete: async (req) => {
+      if (!scheduler) throw new Error("five is starting");
+      return (await scheduler.pool.complete(req)).completion;
+    },
+  };
   const runner: Runner = processes.watch(
     createRunner({
       home: cfg.home,
       cwd: cfg.workspace,
       timeoutMs: cfg.runTimeoutMs,
       memoryMb: cfg.runMemoryMb,
-      host: { llm: llmModule(model), tools: toolsModule(store, () => runner, runnerLog) },
+      host: {
+        llm: llmModule(pooled),
+        tools: toolsModule(store, () => runner, runnerLog),
+      },
       // How five.db() in a run knows which database to refuse.
       env: { FIVE_STATE_DB: state.path },
       log: runnerLog,
     }),
   );
   const runs = new TaggedRunTable(state, log, processes);
-  loop = new Loop({
+  scheduler = new Scheduler({
     state,
     store,
     libs,
@@ -56,13 +75,11 @@ export function createFive(cfg: Config, model: ChatModel, log: Logger = noopLogg
     runs,
     model,
     workspace: cfg.workspace,
-    stateDb: state.path,
-    contextTokens: cfg.contextTokens,
-    maxSteps: cfg.maxSteps,
-    turnDelayMs: cfg.turnDelayMs,
-    supervisor: cfg.supervisor,
+    settings: cfg.settings,
+    tickMs: cfg.tickMs,
     log,
   });
+  const five = scheduler;
   return {
     state,
     store,
@@ -70,9 +87,29 @@ export function createFive(cfg: Config, model: ChatModel, log: Logger = noopLogg
     runner,
     runs,
     processes,
-    loop,
+    five,
+    reset(opts = {}) {
+      five.reset({
+        clear: () => {
+          if (!opts.clean) return;
+          // Run from the repo, the workspace is the repo: never delete that.
+          if (fs.existsSync(path.join(cfg.workspace, ".git"))) {
+            throw new Error(`the workspace ${cfg.workspace} is a git repository; its files are not deleted`);
+          }
+          runs.killAll(AGENT_ID);
+          const tools = store.list().map((t) => t.name);
+          for (const name of tools) store.remove(name);
+          for (const lib of libs.list()) libs.remove(lib.name);
+          state.db.exec("DELETE FROM runs");
+          const files = fs.readdirSync(cfg.workspace).filter((f) => f !== ".five");
+          for (const f of files) fs.rmSync(path.join(cfg.workspace, f), { recursive: true, force: true });
+          log.info("workspace cleaned", { tools: tools.length, entries: files.length });
+        },
+      });
+      log.info("five reset", { clean: Boolean(opts.clean) });
+    },
     async close() {
-      await loop.shutdown();
+      await five.shutdown();
       await runs.shutdown();
       state.close();
     },

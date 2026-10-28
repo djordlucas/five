@@ -2,14 +2,14 @@
 // present; the container sets the same variables.
 
 import * as path from "node:path";
-import { DEFAULTS, type SupervisorSettings } from "./agent/supervisor.ts";
 import { OLLAMA_ENDPOINT } from "./llm/ollama.ts";
 import { type Level, parseLevel } from "./log.ts";
+import { DEFAULTS, type Settings } from "./workers/settings.ts";
 
 export interface Config {
   model: string;
   endpoint: string;
-  /** The context window Ollama loads the model with (num_ctx), in tokens. */
+  /** The context window of each of the model's slots (num_ctx), in tokens. */
   contextTokens: number;
   /** How long Ollama keeps the model loaded after a call; empty for Ollama's default. */
   keepAlive: string;
@@ -21,17 +21,15 @@ export interface Config {
   home: string;
   /** Five's state database: <home>/five.db. */
   stateDb: string;
-  /** Model calls one turn may take before the supervisor ends it. */
-  maxSteps: number;
   /** Wall-clock budget of one run. */
   runTimeoutMs: number;
   /** V8 heap cap of one run, in MiB. */
   runMemoryMb: number;
-  /** Pause between two turns. */
-  turnDelayMs: number;
-  /** The supervisor's settings, before any change made through the API: see src/agent/supervisor.ts. */
-  supervisor: SupervisorSettings;
-  /** Start looping as soon as five starts, even if it was paused when it last stopped. */
+  /** How often five looks for work to start. */
+  tickMs: number;
+  /** The settings, before any change made through the API: see src/workers/settings.ts. */
+  settings: Settings;
+  /** Start the workers as soon as five starts, even if it was paused when it last stopped. */
   autostart: boolean;
   /** Where the HTTP API and web UI listen (host:port). */
   apiAddr: string;
@@ -44,19 +42,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const workspace = path.resolve(env.FIVE_WORKSPACE ?? process.cwd());
   const home = path.join(workspace, ".five");
   return {
-    model: env.FIVE_OLLAMA_MODEL ?? "qwen3.5:9b",
+    model: env.FIVE_OLLAMA_MODEL ?? "qwen3.5:4b",
     endpoint: env.FIVE_OLLAMA_ENDPOINT ?? OLLAMA_ENDPOINT,
-    contextTokens: int(env.FIVE_CONTEXT_TOKENS, 32_768),
+    contextTokens: int(env.FIVE_CONTEXT_TOKENS, 16_384),
     keepAlive: env.FIVE_OLLAMA_KEEP_ALIVE ?? "",
     think: flag(env.FIVE_THINK, "FIVE_THINK"),
     workspace,
     home,
     stateDb: path.join(home, "five.db"),
-    maxSteps: int(env.FIVE_MAX_STEPS, 30),
     runTimeoutMs: int(env.FIVE_RUN_TIMEOUT_MS, 60_000),
     runMemoryMb: int(env.FIVE_RUN_MEMORY_MB, 1024),
-    turnDelayMs: int(env.FIVE_TURN_DELAY_MS, 1000),
-    supervisor: supervisorDefaults(env),
+    tickMs: int(env.FIVE_TICK_MS, 1000),
+    settings: settingsDefaults(env),
     autostart: flag(env.FIVE_AUTOSTART, "FIVE_AUTOSTART"),
     apiAddr: env.FIVE_API_ADDR ?? "127.0.0.1:5555",
     logLevel: parseLevel(env.FIVE_LOG_LEVEL, "info"),
@@ -64,17 +61,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   };
 }
 
-/** The supervisor's defaults, with what the environment sets. FIVE_FOLD_REPLIES=off also keeps idle turns. */
-function supervisorDefaults(env: NodeJS.ProcessEnv): SupervisorSettings {
-  const fold = flag(env.FIVE_FOLD_REPLIES ?? "on", "FIVE_FOLD_REPLIES");
+/** The settings' defaults, with what the environment sets. */
+function settingsDefaults(env: NodeJS.ProcessEnv): Settings {
   return {
     ...DEFAULTS,
-    contextWarn: Math.min(int(env.FIVE_CONTEXT_WARN, DEFAULTS.contextWarn), 100),
-    contextTrim: Math.min(int(env.FIVE_CONTEXT_TRIM, DEFAULTS.contextTrim), 100),
-    foldReplies: fold,
-    dropIdle: fold,
-    idleTurns: int(env.FIVE_IDLE_TURNS, DEFAULTS.idleTurns),
-    resultChars: Math.min(int(env.FIVE_RESULT_CHARS, DEFAULTS.resultChars), 16_000),
+    slots: Math.max(1, int(env.FIVE_SLOTS, DEFAULTS.slots)),
+    taskRuns: int(env.FIVE_TASK_RUNS, DEFAULTS.taskRuns),
+    maxSteps: Math.max(1, int(env.FIVE_MAX_STEPS, DEFAULTS.maxSteps)),
+    runTokens: Math.max(1000, int(env.FIVE_RUN_TOKENS, DEFAULTS.runTokens)),
   };
 }
 

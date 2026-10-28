@@ -3,8 +3,8 @@ import { type Event, type EventsPage, get, type Status } from './api/client';
 
 /**
  * Five's live state, polled once a second: the status, and every event since
- * the last poll. The events of the most recent turns are kept; a reset of the
- * context (the event log starts over) loads them afresh.
+ * the last poll. The events of the most recent runs are kept; a reset (the
+ * event log starts over) loads them afresh.
  */
 
 /** How often the status is polled. */
@@ -37,8 +37,8 @@ export function markInboxSeen(id: number): void {
   }
 }
 
-/** How many turns back the timeline was loaded. */
-export const turnsLoaded = signal(20);
+/** How many runs back the timeline was loaded. */
+export const runsLoaded = signal(30);
 
 let lastSeq = 0;
 let timer: ReturnType<typeof setTimeout> | undefined;
@@ -57,12 +57,12 @@ async function pollOnce(): Promise<void> {
   try {
     const s = await get<Status>('/status');
     if (s.lastSeq < lastSeq) {
-      // The context was reset: its events are gone.
+      // Five was reset: its events are gone.
       lastSeq = 0;
       events.value = [];
     }
     if (lastSeq === 0 && s.lastSeq > 0) {
-      const page = await get<EventsPage>(`/events?turns=${turnsLoaded.value}`);
+      const page = await get<EventsPage>(`/events?runs=${runsLoaded.value}`);
       events.value = page.events;
       lastSeq = page.last;
     }
@@ -101,10 +101,10 @@ export function refresh(): Promise<void> {
   return poll();
 }
 
-/** Load the events of `n` more earlier turns. */
-export async function loadMoreTurns(n = 20): Promise<void> {
-  turnsLoaded.value += n;
-  const page = await get<EventsPage>(`/events?turns=${turnsLoaded.value}`);
+/** Load the events of `n` more earlier runs. */
+export async function loadMoreRuns(n = 30): Promise<void> {
+  runsLoaded.value += n;
+  const page = await get<EventsPage>(`/events?runs=${runsLoaded.value}`);
   events.value = page.events;
   lastSeq = page.last;
 }

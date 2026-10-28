@@ -58,11 +58,11 @@ export function Workspace() {
   );
 }
 
-/** The tabs over Workspace's views: its files, the agent's context, the tools it built and their libraries. */
+/** The tabs over Workspace's views: its files, the workers, the tools the agents built and their libraries. */
 export function InWorkspace({ children }: { children: ComponentChildren }) {
   const { path } = useLocation();
-  const tab = path.startsWith('/workspace/context')
-    ? 'context'
+  const tab = path.startsWith('/workspace/workers')
+    ? 'workers'
     : path.startsWith('/workspace/tools')
       ? 'tools'
       : path.startsWith('/workspace/libraries')
@@ -70,12 +70,13 @@ export function InWorkspace({ children }: { children: ComponentChildren }) {
         : 'files';
   const count = status.value?.tools;
   const libraries = status.value?.libraries;
+  const workers = status.value?.workers;
   return (
     <div class={styles.section}>
       <Segments
         items={[
           { href: '/workspace', label: 'Files', current: tab === 'files', icon: 'file' },
-          { href: '/workspace/context', label: 'Context', current: tab === 'context', icon: 'context' },
+          { href: '/workspace/workers', label: 'Workers', current: tab === 'workers', count: workers, icon: 'worker' },
           { href: '/workspace/tools', label: 'Tools', current: tab === 'tools', count, icon: 'tool' },
           { href: '/workspace/libraries', label: 'Libraries', current: tab === 'libraries', count: libraries, icon: 'library' },
         ]}

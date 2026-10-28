@@ -37,6 +37,8 @@ export interface CompletionRequest {
   image?: (path: string) => string | undefined;
   /** The reply so far, as it streams in: its thinking and its text. */
   onProgress?: (so: { thinking: string; content: string }) => void;
+  /** A JSON Schema the reply must match: Ollama constrains the model's output to it. */
+  format?: Record<string, unknown>;
 }
 
 export interface ChatModel {

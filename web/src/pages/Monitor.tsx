@@ -56,7 +56,7 @@ export function Monitor() {
                   {p.runId && <span class="muted"> · {p.runId}</span>}
                 </span>
                 <span class={split.meta}>
-                  turn {p.turn} · step {p.step} · {clock(p.startedAt)} · {duration(p.durationMs)}
+                  {p.run ? `run ${p.run} · call ${p.step} · ` : ''}{clock(p.startedAt)} · {duration(p.durationMs)}
                   {p.lines > 0 && ` · ${p.lines} lines`}
                 </span>
               </a>
@@ -128,9 +128,9 @@ function Detail({ id, tick }: { id: string; tick: unknown }) {
           </h2>
           <span class="muted">
             {[
-              p.kind === 'code' ? 'run_js code' : p.kind === 'trial' ? 'a define_tool trial' : 'a tool the agent built',
+              p.kind === 'code' ? 'run_js code' : p.kind === 'trial' ? 'a define_tool trial' : p.kind === 'worker' ? 'a task worker' : 'a tool the agent built',
               p.runId ? `background run ${p.runId}` : '',
-              `turn ${p.turn}, step ${p.step}`,
+              p.run ? `run ${p.run}, call ${p.step}` : '',
               `started ${clock(p.startedAt)}`,
               `${live(p) ? 'running for' : 'ran'} ${duration(p.durationMs)}`,
               `id ${p.id}`,
