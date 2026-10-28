@@ -15,7 +15,7 @@ import {
 } from "../agent/builtins/index.ts";
 import { mediaToolsByName } from "../agent/media.ts";
 import { Workspace, WorkspaceError } from "../api/workspace.ts";
-import type { AgentTool } from "./agent.ts";
+import { type AgentTool, futureDate } from "./agent.ts";
 import { MAX_INPUT, MAX_TITLE } from "./board.ts";
 import type { Deps, Run } from "./run.ts";
 import { FIXED } from "./store.ts";
@@ -85,6 +85,8 @@ export function workspaceTools(d: Deps): AgentTool[] {
       },
       run: (a) =>
         guard(() => {
+          const later = futureDate(str(a.path));
+          if (later) return `error: ${later}`;
           const w = ws();
           if (a.replace !== true) {
             try {
@@ -188,6 +190,8 @@ export function boardTools(d: Deps, by: string): AgentTool[] {
         if (title.length > MAX_TITLE)
           return `error: a title is at most ${MAX_TITLE} characters; put the rest in the input`;
         const input = str(a.input);
+        const later = futureDate(`${title}\n${input}`);
+        if (later) return `error: ${later}`;
         if (input.length > MAX_INPUT)
           return `error: an input is at most ${MAX_INPUT} characters; put long data in a file and name it`;
         const task = d.board.post({ worker, title, input, by });

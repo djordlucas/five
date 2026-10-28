@@ -9,7 +9,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { asDeps, depsSchema } from "../agent/builtins/shared.ts";
 import type { AgentTool } from "./agent.ts";
-import { runAgent } from "./agent.ts";
+import { RESULTS_DIR, runAgent } from "./agent.ts";
 import { clip } from "./board.ts";
 import type { Deps, Run } from "./run.ts";
 import { FIXED, WORKER_NAME } from "./store.ts";
@@ -21,6 +21,8 @@ export const NOTES = "memory/lead.md";
 const NOTES_CHARS = 2000;
 /** The latest chat, as the lead gets it. */
 const CHAT_CHARS = 2000;
+/** Files the lead's prompt lists. */
+const RECENT_FILES = 15;
 /** How long a define_worker trial may run. */
 const TRIAL_MS = 180_000;
 
@@ -31,6 +33,7 @@ How five works:
 - A task worker is code: an ES module whose default export gets { task } (id, title, input) and returns the result. In it, five.llm.ask(prompt, { schema }) asks the model once (with a JSON schema, it returns the parsed object), five.llm.agent({ prompt, tools }) runs a small agent with tools such as search_web, fetch_url, read_file, write_file, five.web.feed(url) / text(url) / search(query) read the web, five.board.post(worker, title, input) posts a task, and Node's fs reads and writes the workspace. Let code do what code can — fetching, parsing, files — and the model only what needs judgment: that keeps every call small.
 - Your task workers already work: give them tasks. Revise one only when its tasks fail or its results are poor — read_worker it first, and fix what the results show. define_worker writes a new worker or revises one; a revision must have test_input: it runs once as a real run (it reads and writes the workspace) and replaces the old one only if it works. Your libraries (define_library) are shared code workers import as "lib:name".
 - Workers share the workspace: they exchange data through files. Keep it organized.
+- Leave dates out of tasks and paths: five and its workers know today's date and add it themselves.
 - Your context is small and fresh every run: what you know is in this prompt — the goal, the board, the workers, your notes. Keep your notes (${NOTES}) short and current with write_file (replace: true): what you learned, what works, what to do next.
 
 Each run: read the results, decide what comes next, post tasks for your workers, write a new worker only for work none of them does, update your notes, and message the person (message_person) only when something matters to them. Then reply with one line: what you did.`;
@@ -84,6 +87,10 @@ function leadPrompt(d: Deps, run: Run, more: { chat?: string }): string {
     `## Your notes (${NOTES})`,
     "",
     notes ? clip(notes, NOTES_CHARS) : "None yet.",
+    "",
+    "## Files changed lately",
+    "",
+    ...recentFiles(d.workspace),
   ];
   if (unread.length || more.chat) {
     parts.push("", "## From the person", "");
@@ -97,6 +104,39 @@ function leadPrompt(d: Deps, run: Run, more: { chat?: string }): string {
     `${new Date().toISOString().slice(0, 16).replace("T", " ")} UTC, run ${run.n}. ${counts.open} open, ${counts.running} running; keep at least ${minOpenTasks} open, so every worker slot has work.${counts.open < minOpenTasks ? ` Post at least ${minOpenTasks - counts.open} tasks now, on different topics, before anything else.` : ""} Decide, act, and reply with one line.`,
   );
   return parts.join("\n");
+}
+
+/** Directories the lead's file list leaves out: five's own, kept results, chats. */
+const UNLISTED = new Set([".five", RESULTS_DIR, "chats", "node_modules"]);
+
+/** The workspace's most recently changed files, newest first: what the workers have been making. */
+function recentFiles(workspace: string, n = RECENT_FILES): string[] {
+  const found: { rel: string; bytes: number; at: number }[] = [];
+  const walk = (dir: string, depth: number) => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(path.join(workspace, dir), { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (e.name.startsWith(".") || (depth === 0 && UNLISTED.has(e.name))) continue;
+      const rel = dir ? `${dir}/${e.name}` : e.name;
+      if (e.isDirectory()) {
+        if (depth < 4) walk(rel, depth + 1);
+      } else if (e.isFile()) {
+        const st = fs.statSync(path.join(workspace, rel));
+        found.push({ rel, bytes: st.size, at: st.mtimeMs });
+      }
+    }
+  };
+  walk("", 0);
+  if (!found.length) return ["None yet."];
+  const now = Date.now();
+  return found
+    .sort((a, b) => b.at - a.at)
+    .slice(0, n)
+    .map((f) => `- ${f.rel} (${f.bytes} bytes, ${Math.max(0, Math.round((now - f.at) / 60_000))} min ago)`);
 }
 
 function leadTools(d: Deps): AgentTool[] {

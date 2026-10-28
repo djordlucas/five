@@ -33,6 +33,13 @@ export function today(): string {
   return `Today is ${day}, ${now.toISOString().slice(0, 10)} (UTC). Use this date; never guess another.`;
 }
 
+/** A date in the text later than today, which a small model has guessed: say so, or nothing. */
+export function futureDate(text: string): string | undefined {
+  const now = new Date().toISOString().slice(0, 10);
+  const later = text.match(/\b20\d\d-[01]\d-[0-3]\d\b/g)?.find((day) => day > now);
+  return later && `${later} has not come yet: today is ${now}. Leave dates out — five and its workers add today's.`;
+}
+
 export interface AgentTool extends ToolDef {
   run(args: Record<string, unknown>, run: Run): Promise<string>;
 }

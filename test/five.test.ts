@@ -32,7 +32,7 @@ import { type AgentResult, runAgent } from "../src/workers/agent.ts";
 import { Board } from "../src/workers/board.ts";
 import { ModelPool } from "../src/workers/pool.ts";
 import { Run, runScope } from "../src/workers/run.ts";
-import { toolsByName } from "../src/workers/tools.ts";
+import { boardTools, toolsByName, workspaceTools } from "../src/workers/tools.ts";
 import { feedItems, htmlToText, parseResults } from "../src/workers/web.ts";
 
 type Reply = { content?: string; calls?: [string, Record<string, unknown>][]; tokens?: number };
@@ -621,42 +621,78 @@ test("the Ollama client reads a streamed reply as it arrives", async () => {
   }
 });
 
-test("the lead posts a task; the research worker does it through five.llm.agent, and its result is on the board", async () => {
+test("the lead posts a task; the research worker does it through five.llm.agent, keeps only the facts its source says, and its result is on the board", async () => {
+  // The source the research agent reads.
+  const http = await import("node:http");
+  const site = http.createServer((_req, res) => {
+    res.setHeader("content-type", "text/html");
+    res.end(
+      "<html><body><p>X is the twenty-fourth letter of the Latin alphabet, used in many languages.</p></body></html>",
+    );
+  });
+  await new Promise<void>((r) => site.listen(0, "127.0.0.1", r));
+  const url = `http://127.0.0.1:${(site.address() as { port: number }).port}/x`;
+  const last = (req: CompletionRequest) => String(req.messages.at(-1)?.content);
   const { five, model, cfg } = make((req) => {
     const sys = system(req);
     const steps = req.messages.filter((m) => m.role === "assistant").length;
     if (sys.startsWith("You are the lead")) {
       return steps === 0
-        ? { calls: [["post_task", { worker: "research", title: "Find what X is", input: "Write research/x.md." }]] }
+        ? { calls: [["post_task", { worker: "research", title: "Find what X is", input: "story: letter-x" }]] }
         : { content: "Posted one research task." };
     }
     if (sys.startsWith("You are a research worker")) {
       return steps === 0
-        ? { calls: [["write_file", { path: "research/x.md", content: "X is a letter. (https://x.test)" }]] }
-        : { content: "X is a letter: research/x.md" };
+        ? { calls: [["fetch_url", { url }]] }
+        : { content: `X is a letter — ${url} — X is the twenty-fourth letter of the Latin alphabet` };
+    }
+    if (last(req).startsWith("Research notes:")) {
+      return {
+        content: JSON.stringify({
+          facts: [
+            { fact: "X is the 24th letter.", url, quote: "X is the twenty-fourth letter of the Latin alphabet" },
+            { fact: "X was invented in 1900.", url, quote: "The letter X was invented by a committee in 1900." },
+          ],
+          watch: "Whether Y follows.",
+        }),
+      };
     }
     return { content: "?" };
   });
-  five.five.settings.update({ minOpenTasks: 0 });
-  five.five.start();
-  await until(() => five.five.board.counts().done === 1, "the task to be done");
-  five.five.pause();
+  try {
+    five.five.settings.update({ minOpenTasks: 0 });
+    five.five.start();
+    await until(() => five.five.board.counts().done === 1, "the task to be done");
+    five.five.pause();
+  } finally {
+    site.close();
+  }
   const task = five.five.board.list()[0] as Task;
-  assert.deepEqual(
-    [task.worker, task.status, task.postedBy, task.result],
-    ["research", "done", "lead", "X is a letter: research/x.md"],
+  assert.deepEqual([task.worker, task.status, task.postedBy], ["research", "done", "lead"]);
+  assert.match(
+    task.result ?? "",
+    /^1 checked facts added to news\/stories\/letter-x\.md \(story: letter-x\)\. 1 dropped/,
   );
-  assert.equal(fs.readFileSync(path.join(cfg.workspace, "research/x.md"), "utf8"), "X is a letter. (https://x.test)");
+  const day = new Date().toISOString().slice(0, 10);
+  const story = fs.readFileSync(path.join(cfg.workspace, "news/stories/letter-x.md"), "utf8");
+  assert.equal(
+    story,
+    `# Find what X is\n\n## ${day}\n\n- X is the 24th letter. ([source](${url}): “X is the twenty-fourth letter of the Latin alphabet”)\n- Watch: Whether Y follows.\n`,
+  );
+  assert.match(
+    fs.readFileSync(path.join(cfg.workspace, "news/index.md"), "utf8"),
+    /- \[Find what X is\]\(stories\/letter-x\.md\), updated /,
+  );
 
   // The lead's prompt: the goal, the board, the task workers — built fresh.
   const lead = model.requests[0] ?? [];
   assert.match(
     String(lead[1]?.content),
-    /^## Goal\n\nFollow what is happening in the world[\s\S]*## Task workers\n\n- feeds \(r1[\s\S]*- research \(r1/,
+    /^## Goal\n\nFollow what is happening in the world[\s\S]*## Task workers\n\n- feeds \(r1[\s\S]*- research \(r1[\s\S]*## Files changed lately\n\nNone yet\./,
   );
   // The research agent's context: its own prompt, nothing of the lead's.
   const research = model.requests.find((r) => system({ messages: r }).startsWith("You are a research worker")) ?? [];
-  assert.match(String(research[1]?.content), /^Task #1: Find what X is\n\nWrite research\/x\.md\./);
+  assert.match(String(research[1]?.content), /^Task #1: Find what X is\n\nstory: letter-x$/);
 
   const seen = events(five);
   const runs = seen
@@ -664,12 +700,30 @@ test("the lead posts a task; the research worker does it through five.llm.agent,
     .map((e) => e.type === "run_started" && `${e.run}:${e.worker}`);
   assert.deepEqual(runs, ["1:lead", "2:research"]);
   const work = seen.filter((e) => e.run === 2).map((e) => (e.type === "tool" ? `tool:${e.name}` : e.type));
-  assert.deepEqual(work, ["run_started", "model", "tool:write_file", "model", "task", "run_ended"]);
+  assert.deepEqual(work, ["run_started", "model", "tool:fetch_url", "model", "model", "task", "run_ended"]);
   const ended = seen.find((e) => e.type === "run_ended" && e.run === 2);
   assert.equal(ended?.type === "run_ended" && ended.outcome, "done");
   // The worker's code ran as a process of its run.
   const proc = five.processes.list().find((p) => p.kind === "worker");
   assert.deepEqual([proc?.label, proc?.run, proc?.state], ["worker research", 2, "ok"]);
+});
+
+test("a date that has not come yet is refused in a task and a path", async () => {
+  const { five } = make([
+    { calls: [["post_task", { worker: "feeds", title: "Digest for 2099-12-31" }]] },
+    { calls: [["write_file", { path: "news/2099-12-31.md", content: "x" }]] },
+    { content: "ok" },
+  ]);
+  const d = five.five.d;
+  const run = new Run({ n: d.state.nextRun(), worker: "lead", kind: "lead", log: noopLogger, emit: d.emit });
+  const tools = [...boardTools(d, "lead"), ...workspaceTools(d)];
+  await runScope.run(run, () =>
+    runAgent(d, run, { system: "You are a test.", messages: [{ role: "user", content: "go" }], tools }),
+  );
+  const results = events(five).flatMap((e) => (e.type === "tool" ? [e.result] : []));
+  assert.equal(results.length, 2);
+  for (const r of results) assert.match(r, /^error: 2099-12-31 has not come yet: today is \d{4}-\d\d-\d\d\./);
+  assert.equal(five.five.board.counts().open, 0);
 });
 
 test("define_worker: tried on a trial task first, refused for five's own workers; then it does a task", async () => {
