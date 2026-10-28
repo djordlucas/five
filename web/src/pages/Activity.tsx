@@ -1,6 +1,6 @@
 import { signal } from '@preact/signals';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { type Event, type LiveWork, message, post } from '../api/client';
+import { type ChatStatus, type Event, type LiveWork, message, post } from '../api/client';
 import { Code } from '../code';
 import { fileHref, rawUrl } from '../workspace';
 import { Icon } from '../components/Icon';
@@ -41,7 +41,16 @@ interface Turn {
   turn: number;
   started?: Of<'turn_started'>;
   /** Everything after the prompt, in the order it happened, the turn's end among it. */
-  items: (Of<'model'> | Of<'context'> | Of<'loop'> | Of<'inbox'> | Of<'supervisor'> | Of<'turn_ended'>)[];
+  items: (
+    | Of<'model'>
+    | Of<'chat'>
+    | Of<'chat_ended'>
+    | Of<'context'>
+    | Of<'loop'>
+    | Of<'inbox'>
+    | Of<'supervisor'>
+    | Of<'turn_ended'>
+  )[];
   /** Tool results by call id. */
   results: Map<string, Of<'tool'>>;
 }
@@ -62,17 +71,21 @@ function group(list: Event[]): Turn[] {
   return turns;
 }
 
-/** The loop as it runs: its controls, then every turn, newest at the bottom, followed as it grows. */
+/**
+ * The loop as it runs: its controls, then every turn, newest at the bottom,
+ * followed as it grows — and the chat with five, below it.
+ */
 export function Activity() {
   const turns = useMemo(() => group(events.value), [events.value]);
   const bottom = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
 
   const live = status.value?.loop.busy ? status.value.loop.live : undefined;
-  // Follow the bottom as events arrive and as the model's reply streams in.
+  const chat = status.value?.loop.chat;
+  // Follow the bottom as events arrive, as the model's reply streams in, and as the person writes.
   useLayoutEffect(() => {
     if (stick.current) bottom.current?.scrollIntoView({ block: 'end' });
-  }, [events.value.length, live?.phase, live?.thinking?.length, live?.content?.length]);
+  }, [events.value.length, live?.phase, live?.thinking?.length, live?.content?.length, chat?.queued.length]);
   useEffect(() => {
     const onScroll = () => {
       const b = bottom.current?.getBoundingClientRect();
@@ -97,7 +110,15 @@ export function Activity() {
       {visible.map((t) => (
         <TurnView key={t.turn} t={t} live={t.turn === status.value?.loop.turn ? live : undefined} />
       ))}
+      {chat?.queued.map((text, i) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: the queue only grows until it is taken whole
+        <div key={i} class={`${styles.you} ${styles.queued}`}>
+          {text}
+          <span class={styles.bubbleMeta}>joins the turn at its next step</span>
+        </div>
+      ))}
       <div ref={bottom} />
+      <Composer chat={chat} />
     </div>
   );
 }
@@ -218,7 +239,22 @@ function TurnView({ t, live }: { t: Turn; live?: LiveWork }) {
       {t.items.map((e) => {
         switch (e.type) {
           case 'model':
-            return <Step key={e.seq} e={e} results={t.results} />;
+            return e.chat ? <Answer key={e.seq} e={e} /> : <Step key={e.seq} e={e} results={t.results} />;
+          case 'chat':
+            return (
+              <div key={e.seq} class={styles.you}>
+                {e.text}
+                <span class={styles.bubbleMeta}>you · {clock(e.at)}</span>
+              </div>
+            );
+          case 'chat_ended':
+            return (
+              <p key={e.seq} class={styles.line}>
+                <At iso={e.at} />
+                <Kind icon="chat" />
+                Chat ended: {chatEndLabel[e.reason]}
+              </p>
+            );
           case 'context':
             return (
               <p key={e.seq} class={styles.line}>
@@ -345,7 +381,129 @@ const endLabel: Record<Of<'turn_ended'>['reason'], string> = {
   max_steps: 'out of steps',
   stopped: 'stopped',
   error: 'failed',
+  chat: 'the chat ended, and the loop is paused',
 };
+
+const chatEndLabel: Record<Of<'chat_ended'>['reason'], string> = {
+  left: 'you left it',
+  timeout: 'no answer from you in time',
+  turn_ended: 'the turn ended',
+};
+
+/** Five's reply in a chat: a bubble on the left, the thinking behind it folded. */
+function Answer({ e }: { e: Of<'model'> }) {
+  return (
+    <div class={styles.five}>
+      {e.thinking && (
+        <details class={styles.thinking}>
+          <summary>Thinking</summary>
+          <pre class={styles.pre}>{e.thinking}</pre>
+        </details>
+      )}
+      <Markdown text={e.content ?? ''} class={styles.md} />
+      <span class={styles.bubbleMeta}>
+        five · {clock(e.at)} · {duration(e.durationMs)}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * Where the person chats with five. A message joins the running turn at its
+ * next step, or runs one turn when the loop is paused; five's replies come
+ * back in the timeline, and the turn waits for the person until they leave.
+ */
+function Composer({ chat }: { chat?: ChatStatus }) {
+  const [text, setText] = useState('');
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const s = status.value;
+  if (!s) return null;
+  const { loop } = s;
+  const send = async () => {
+    const t = text.trim();
+    if (!t || sending) return;
+    setSending(true);
+    setError(null);
+    try {
+      await post('/chat', { text: t });
+      setText('');
+      await refresh();
+    } catch (err) {
+      setError(message(err));
+    } finally {
+      setSending(false);
+    }
+  };
+  const leave = async () => {
+    setError(null);
+    try {
+      await post('/chat/leave');
+      await refresh();
+    } catch (err) {
+      setError(message(err));
+    }
+  };
+  const left = chat?.waitingUntil ? Math.max(0, Math.round((Date.parse(chat.waitingUntil) - Date.now()) / 1000)) : 0;
+  const hint = chat?.waitingUntil
+    ? `five is waiting for you · ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')} left, then its work goes on`
+    : chat?.open
+      ? 'five is answering…'
+      : chat?.queued.length
+        ? 'your message joins the turn at its next step'
+        : loop.busy
+          ? 'chat with five: your message joins this turn at its next step'
+          : loop.running
+            ? 'chat with five: your message starts the next turn now'
+            : 'chat with five: the loop is paused, so your message runs one turn for the chat';
+  return (
+    <form
+      class={styles.composer}
+      onSubmit={(e) => {
+        e.preventDefault();
+        void send();
+      }}
+    >
+      <div class={styles.composerRow}>
+        <textarea
+          rows={2}
+          value={text}
+          placeholder="Ask five something, or redirect it…"
+          aria-label="Chat with five"
+          onInput={(e) => setText(e.currentTarget.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+              e.preventDefault();
+              void send();
+            }
+          }}
+        />
+        <div class={styles.composerActions}>
+          <button type="submit" class={styles.action} disabled={!text.trim() || sending}>
+            <Icon name="send" size={16} />
+            Send
+          </button>
+          {(chat?.open || chat?.queued.length) && (
+            <button
+              type="button"
+              class={styles.action}
+              onClick={() => void leave()}
+              title="End the chat: the turn carries on with its work, or ends while the loop is paused"
+            >
+              <Icon name="leave" size={16} />
+              Leave chat
+            </button>
+          )}
+        </div>
+      </div>
+      <span class={styles.composerHint}>
+        {chat?.waitingUntil && <span class={styles.pulse} aria-hidden="true" />}
+        {hint} · Enter sends, Shift+Enter for a new line
+      </span>
+      {error && <p class="error">{error}</p>}
+    </form>
+  );
+}
 
 function Step({ e, results }: { e: Of<'model'>; results: Map<string, Of<'tool'>> }) {
   return (

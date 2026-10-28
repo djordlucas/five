@@ -38,6 +38,8 @@ export interface ContextEnv {
   selfBlock(): string;
   /** Puts a message in the person's inbox; an error when this turn sent its share. */
   sendMessage(subject: string, text: string): string;
+  /** The inbox, both ways, the latest `last` messages; the person's unread ones are read by it. */
+  readInbox(last: number): string;
   /** Why a next prompt would waste the next turn, if it would. */
   checkNext(text: string): string | undefined;
   /** Why the self note may not be this long, if it may not. */
@@ -304,6 +306,21 @@ export const contextTools: ContextTool[] = [
         return `error: the subject is ${subject.length} characters; at most ${MAX_SUBJECT}`;
       if (!text) return "error: the message is empty";
       return env.sendMessage(subject, text);
+    },
+  },
+  {
+    name: "read_inbox",
+    description:
+      "Read the inbox: your messages to the person and theirs to you, oldest first, the newest marked as new. " +
+      "Their messages also come before the prompt of the turn after they write, once; this shows them again, and " +
+      "shows one sent during this turn now.",
+    parameters: {
+      type: "object",
+      properties: { last: { type: "integer", description: "How many of the latest messages. Default 10." } },
+    },
+    run(a, env) {
+      const last = typeof a.last === "number" && Number.isInteger(a.last) && a.last > 0 ? Math.min(a.last, 50) : 10;
+      return env.readInbox(last);
     },
   },
   {

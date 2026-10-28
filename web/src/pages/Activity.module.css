@@ -469,3 +469,121 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+/* The chat: the person's messages on the right, five's answers on the left. */
+.you,
+.five {
+  display: grid;
+  gap: var(--space-1);
+  max-width: min(85%, 640px);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-lg);
+  overflow-wrap: anywhere;
+}
+
+.you {
+  align-self: flex-end;
+  border: 1px solid var(--accent);
+  background: var(--surface);
+  white-space: pre-wrap;
+}
+
+.queued {
+  border-style: dashed;
+  opacity: 0.75;
+}
+
+.five {
+  align-self: flex-start;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.bubbleMeta {
+  font-size: var(--text-xs);
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  white-space: normal;
+}
+
+.you .bubbleMeta {
+  text-align: right;
+}
+
+/* The chat box, pinned to the bottom of the page. */
+.composer {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  display: grid;
+  gap: var(--space-1);
+  margin: 0 calc(-1 * var(--space-6)) calc(-1 * var(--space-6));
+  padding: var(--space-3) var(--space-6);
+  background: var(--bg);
+  /* Like the controls bar: its background and its line span the window. */
+  box-shadow: 0 0 0 100vmax var(--bg);
+  clip-path: inset(0 -100vmax);
+}
+
+.composer::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: -100vmax;
+  left: -100vmax;
+  height: 1px;
+  background: var(--border);
+}
+
+.composer .error {
+  margin: 0;
+}
+
+.composerRow {
+  display: flex;
+  gap: var(--space-2);
+  align-items: stretch;
+}
+
+.composerRow textarea {
+  flex: 1;
+  min-width: 0;
+  resize: vertical;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.composerActions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.action:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.composerHint {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--text-2);
+}
+
+@media (max-width: 767px) {
+  .composer {
+    margin: 0 calc(-1 * var(--space-4)) calc(-1 * var(--space-5));
+    padding: var(--space-2) var(--space-4);
+  }
+
+  .you,
+  .five {
+    max-width: 92%;
+  }
+}

@@ -24,6 +24,7 @@ import type {
   InboxPage,
   LibraryDetail,
   LibraryInfo,
+  LoopStatus,
   Status,
   SupervisorView,
   ToolDetail,
@@ -218,6 +219,18 @@ export function createApi(opts: ApiOptions): http.Server {
     const asPrompt = (body as { asPrompt?: unknown } | undefined)?.asPrompt;
     if (asPrompt !== undefined && typeof asPrompt !== "boolean") throw new HttpError(400, "asPrompt must be a boolean");
     return loop.receive(t, asPrompt === true);
+  });
+
+  // ── the chat ────────────────────────────────────────────────────────────
+  route("POST", "/api/v1/chat", ({ body }): LoopStatus => {
+    const t = text(body, "text").trim();
+    if (t.length > MAX_MESSAGE_CHARS) throw new HttpError(400, `a message is at most ${MAX_MESSAGE_CHARS} characters`);
+    loop.chat(t);
+    return loop.status();
+  });
+  route("POST", "/api/v1/chat/leave", (): LoopStatus => {
+    guarded(() => loop.leaveChat());
+    return loop.status();
   });
 
   // ── events ──────────────────────────────────────────────────────────────

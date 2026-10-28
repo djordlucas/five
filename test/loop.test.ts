@@ -1093,3 +1093,167 @@ test("a message sent as the prompt becomes the next turn's prompt; others still 
     server.close();
   }
 });
+
+test("read_inbox shows both sides, reads a message sent during the turn, and the self block counts the unread", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "five-test-"));
+  const cfg = loadConfig({
+    FIVE_WORKSPACE: dir,
+    FIVE_TURN_DELAY_MS: "0",
+    FIVE_IDLE_TURNS: "0",
+    FIVE_FOLD_REPLIES: "off",
+  });
+  const requests: Message[][] = [];
+  let five: Five | undefined;
+  const call = (name: string, args: Record<string, unknown> = {}) => ({
+    message: {
+      role: "assistant" as const,
+      content: null,
+      tool_calls: [
+        { id: `c${requests.length}`, type: "function" as const, function: { name, arguments: JSON.stringify(args) } },
+      ],
+    },
+  });
+  const replies = [
+    () => call("message_person", { subject: "Hello", text: "Starting." }),
+    () => {
+      five?.loop.receive("Look at the news instead.");
+      return call("memory_read");
+    },
+    () => call("read_inbox"),
+    () => ({ message: { role: "assistant" as const, content: "ok" } }),
+    () => ({ message: { role: "assistant" as const, content: "ok" } }),
+  ];
+  five = createFive(cfg, {
+    async complete(req) {
+      requests.push(structuredClone(req.messages));
+      return (
+        replies[requests.length - 1] ??
+        replies[4] ??
+        (() => ({ message: { role: "assistant" as const, content: "" } }))
+      )();
+    },
+  });
+  open.push(five);
+  await turn(five);
+  const self = (i: number) => requests[i]?.at(-1)?.content as string;
+  assert.match(self(2), /1 from them, 1 unread: read_inbox shows it/);
+  const result = requests[3]?.findLast((m) => m.role === "tool")?.content as string;
+  assert.match(
+    result,
+    /you → the person: Hello — Starting\.[\s\S]*the person → you \(new\): Look at the news instead\./,
+  );
+  assert.doesNotMatch(self(3), /unread/);
+  // Read once, it is not put before the next prompt again.
+  await turn(five);
+  assert.equal(requests[4]?.at(-2)?.content, SEED_PROMPT);
+});
+
+/** Wait until a condition holds, checking every few milliseconds. */
+async function until(ok: () => boolean, what: string): Promise<void> {
+  const t0 = Date.now();
+  while (!ok()) {
+    if (Date.now() - t0 > 5000) throw new Error(`timed out waiting for ${what}`);
+    await new Promise((r) => setTimeout(r, 5));
+  }
+}
+
+test("a chat while paused runs a turn: replies go to the person, the turn waits, and leaving ends it", async () => {
+  const { five, model, cfg } = make(
+    [
+      { content: "Hello! I follow the news." },
+      { calls: [["memory_read", {}]] },
+      { content: "Yes: I will look at Asia next." },
+    ],
+    { FIVE_FOLD_REPLIES: "on" },
+  );
+  const server = createApi({ five, cfg, log: (await import("../src/log.ts")).noopLogger });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  const post = (url: string, body?: unknown) =>
+    fetch(`${base}${url}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      ...(body !== undefined && { body: JSON.stringify(body) }),
+    });
+  try {
+    assert.equal((await post("/api/v1/chat", { text: " " })).status, 400);
+    assert.equal((await post("/api/v1/chat/leave")).status, 409);
+
+    assert.equal((await post("/api/v1/chat", { text: "What are you doing?" })).status, 200);
+    await until(() => five.loop.status().chat?.waitingUntil !== undefined, "the first answer");
+    const first = model.requests[0] ?? [];
+    assert.match(
+      String(first.at(-1)?.content),
+      /^\[The person, live in a chat: they wait for your answer\] What are you doing\?/,
+    );
+    assert.match(model.selves[0] ?? "", /You are in a live chat with the person/);
+    assert.equal(five.loop.status().chat?.open, true);
+
+    five.loop.chat("Can you cover Asia?");
+    await until(
+      () => model.requests.length === 3 && five.loop.status().chat?.waitingUntil !== undefined,
+      "the second answer",
+    );
+    assert.equal(model.requests[1]?.at(-1)?.content, "[The person, in the chat] Can you cover Asia?");
+
+    assert.equal((await post("/api/v1/chat/leave")).status, 200);
+    await until(() => !five.loop.status().busy, "the turn's end");
+    assert.equal(five.loop.status().chat, undefined);
+    assert.equal(model.requests.length, 3, "a paused loop's turn ends when the chat does");
+
+    const events = five.state
+      .eventsAfter(0, 1000)
+      .filter(
+        (e) =>
+          e.type === "chat" || e.type === "chat_ended" || e.type === "turn_ended" || (e.type === "model" && e.chat),
+      );
+    assert.deepEqual(
+      events.map((e) =>
+        e.type === "turn_ended" ? `ended:${e.reason}` : e.type === "chat_ended" ? `left:${e.reason}` : e.type,
+      ),
+      ["chat", "model", "chat", "model", "left:left", "ended:chat"],
+    );
+    // The fold keeps what was said.
+    const kept = String(five.loop.ctx.messages.at(-1)?.content);
+    assert.match(
+      kept,
+      /\[Your chat with the person in turn 1\]\nThe person: What are you doing\?\nYou: Hello! I follow the news\.\nThe person: Can you cover Asia\?\nYou: Yes: I will look at Asia next\./,
+    );
+  } finally {
+    server.close();
+  }
+});
+
+test("a chat joins a running turn at its next step, and the turn's work carries on when the person leaves", async () => {
+  const { five, model } = make([
+    { calls: [["memory_read", {}]] },
+    { content: "Hi, I am reading my notes." },
+    { calls: [["end_turn", { summary: "Read my notes and chatted.", next: "Read the BBC feed." }]] },
+  ]);
+  const real = model.complete.bind(model);
+  let chatted = false;
+  model.complete = async (req) => {
+    const r = await real(req);
+    if (!chatted) {
+      chatted = true;
+      five.loop.chat("hello");
+    }
+    return r;
+  };
+  five.loop.start();
+  await until(() => five.loop.status().chat?.waitingUntil !== undefined, "the answer");
+  assert.equal(model.requests[1]?.at(-1)?.role, "user");
+  assert.match(String(model.requests[1]?.at(-1)?.content), /\] hello/);
+  five.loop.pause();
+  five.loop.start();
+  five.loop.leaveChat();
+  await until(() => five.loop.ctx.next === "Read the BBC feed.", "the turn's end");
+  five.loop.pause();
+  await until(() => !five.loop.status().busy, "the loop to stop");
+  assert.match(
+    String(model.requests[2]?.at(-1)?.content),
+    /^\[five\] The person left the chat\. Carry on with this turn's work\./,
+  );
+  const ended = five.state.eventsAfter(0, 1000).find((e) => e.type === "turn_ended");
+  assert.equal(ended?.type === "turn_ended" && ended.reason, "end_turn");
+});

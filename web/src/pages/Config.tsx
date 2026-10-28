@@ -115,6 +115,7 @@ const groupIcons: Record<string, IconName> = {
   'Next prompt': 'next',
   'Self and inbox': 'person',
   Results: 'file',
+  Chat: 'chat',
 };
 
 function Row(props: {

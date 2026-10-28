@@ -245,17 +245,19 @@ export class State {
   }
 
   /** How many messages five sent and on which turn the last, and how many the person sent. */
-  inboxCounts(): { sent: number; lastSentTurn: number | null; received: number } {
+  inboxCounts(): { sent: number; lastSentTurn: number | null; received: number; unread: number } {
     const row = this.db
       .prepare(
         "SELECT COUNT(*) FILTER (WHERE sender = 'five') AS sent, MAX(turn) FILTER (WHERE sender = 'five') AS last, " +
-          "COUNT(*) FILTER (WHERE sender = 'person') AS received FROM inbox",
+          "COUNT(*) FILTER (WHERE sender = 'person') AS received, " +
+          "COUNT(*) FILTER (WHERE sender = 'person' AND delivered_turn IS NULL) AS unread FROM inbox",
       )
-      .get() as { sent: number; last: number | null; received: number };
+      .get() as { sent: number; last: number | null; received: number; unread: number };
     return {
       sent: Number(row.sent),
       lastSentTurn: row.last === null ? null : Number(row.last),
       received: Number(row.received),
+      unread: Number(row.unread),
     };
   }
 

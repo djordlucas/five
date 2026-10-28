@@ -138,7 +138,7 @@
   <text class="c" x="112" y="1012">read_context</text>
   <text class="c" x="112" y="1034">set_system_prompt · edit_system_prompt</text>
   <text class="c" x="112" y="1056">edit_message · insert_message</text>
-  <text class="c" x="112" y="1078">delete_messages</text>
+  <text class="c" x="112" y="1078">delete_messages · read_inbox</text>
   <text class="c" x="112" y="1100">set_next_prompt · message_person</text>
   <text class="c" x="112" y="1122">end_turn(summary, next)</text>
   <text class="m" x="112" y="1148">change the context in memory</text>

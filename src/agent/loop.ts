@@ -10,10 +10,16 @@
 // folding and dropping turns, the idle pause, the self block, the limits on the
 // agent's tools — is the supervisor's (supervisor.ts), tunable while the loop
 // runs. The person's inbox replies are put before the next turn's prompt.
+//
+// The person can also chat: their message joins the turn at its next step
+// (starting a turn when none runs), the agent's replies without a tool call go
+// to them, and the turn waits for their answer instead of ending — until they
+// leave, or do not answer in time. Then the turn carries on with its work; a
+// paused loop's turn ends there.
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { InboxMessage, LoopStatus } from "../api/types.ts";
+import type { ChatEnd, InboxMessage, LoopStatus } from "../api/types.ts";
 import type { ChatModel, Message, ToolCall, ToolDef } from "../llm/model.ts";
 import { recoverToolCalls } from "../llm/textcalls.ts";
 import { type Logger, noopLogger, preview } from "../log.ts";
@@ -77,6 +83,16 @@ export class Loop {
     thinking?: string;
     content?: string;
   };
+  /** The person's chat messages not yet in the context: they join the turn at its next step. */
+  private chatQueue: string[] = [];
+  /** A chat is open in this turn: the agent's replies go to the person. */
+  private chatting = false;
+  /** The person left the chat while the agent was busy: it ends at the next step. */
+  private chatLeft = false;
+  /** This turn's chat, both sides, kept through the turn's fold. */
+  private chatLog: string[] = [];
+  /** While the turn waits for the person: until when, and what ends the wait. */
+  private chatWait?: { until: number; done: (r: "message" | "left") => void };
   /** Images view_image attached in this step, shown after its results. */
   private attached: string[] = [];
   private abort?: AbortController;
@@ -119,6 +135,13 @@ export class Loop {
           ...(this.live.tool && { tool: this.live.tool }),
           ...(this.live.thinking && { thinking: tail(this.live.thinking) }),
           ...(this.live.content && { content: tail(this.live.content) }),
+        },
+      }),
+      ...((this.chatting || this.chatQueue.length > 0) && {
+        chat: {
+          open: this.chatting,
+          ...(this.chatWait && { waitingUntil: new Date(this.chatWait.until).toISOString() }),
+          queued: [...this.chatQueue],
         },
       }),
     };
@@ -167,9 +190,33 @@ export class Loop {
     return m;
   }
 
+  /**
+   * The person says something in the chat: it joins the turn at its next step,
+   * or starts a turn now when none runs — even while the loop is paused.
+   */
+  chat(text: string): void {
+    this.chatQueue.push(text);
+    this.chatLeft = false;
+    this.o.log.info("chat message queued", { busy: this.busy });
+    if (this.chatWait) this.chatWait.done("message");
+    else if (!this.busy) {
+      // Between turns, the wait is cut short; paused, one turn runs for the chat.
+      if (this.running) this.wait?.abort();
+      else void this.turn();
+    }
+  }
+
+  /** The person leaves the chat: the turn carries on with its work, or ends if the loop is paused. */
+  leaveChat(): void {
+    if (!this.chatting && !this.chatQueue.length) throw new Error("no chat is open");
+    this.chatQueue = [];
+    if (this.chatWait) this.chatWait.done("left");
+    else if (this.chatting) this.chatLeft = true;
+  }
+
   /** Five's self block as the next model call sends it; empty when it is off. */
   selfBlock(): string {
-    return this.supervisor.selfBlock(this.ctx, this.step, this.promptTokens) ?? "";
+    return this.supervisor.selfBlock(this.ctx, this.step, this.promptTokens, this.chatting) ?? "";
   }
 
   /** Run one turn while paused. */
@@ -305,13 +352,26 @@ export class Loop {
     let reason: TurnEnd = "max_steps";
     let error: string | undefined;
     let worked = false;
+    // Steps taken in a chat do not count against the turn's limit.
+    let chatSteps = 0;
+    this.chatLog = [];
     try {
-      for (this.step = 1; this.step <= this.o.maxSteps; this.step++) {
+      for (this.step = 1; this.step - chatSteps <= this.o.maxSteps; this.step++) {
         const step = this.step;
         const stepLog = log.child({ step });
+        if (this.chatLeft) {
+          this.endChat("left");
+          if (!this.running) {
+            reason = "chat";
+            this.supervisor.endedWithReply(ctx, opening, undefined, worked, this.chatTranscript());
+            break;
+          }
+        }
+        this.takeChat();
+        if (this.chatting) chatSteps++;
         const tools = this.tools();
         const t0 = performance.now();
-        const self = this.supervisor.selfBlock(ctx, step, this.promptTokens);
+        const self = this.supervisor.selfBlock(ctx, step, this.promptTokens, this.chatting);
         this.live = { step, phase: "model", startedAt: Date.now() };
         const completion = await this.o.model.complete({
           messages: [
@@ -343,6 +403,7 @@ export class Loop {
         const { thinking, ...kept } = message;
         ctx.messages.push(kept);
         this.save();
+        const answer = this.chatting && !message.tool_calls?.length;
         this.emit({
           type: "model",
           step,
@@ -350,13 +411,30 @@ export class Loop {
           ...(thinking && { thinking }),
           calls: (message.tool_calls ?? []).map((c) => ({ id: c.id, ...c.function })),
           ...(fromText && { fromText }),
+          ...(answer && { chat: true }),
           promptTokens: completion.usage?.prompt_tokens,
           completionTokens: completion.usage?.completion_tokens,
           durationMs,
         });
+        if (answer) {
+          // The answer went to the person: the turn waits for theirs.
+          this.chatLog.push(`You: ${clipLine(message.content ?? "")}`);
+          this.live = undefined;
+          const heard = this.chatLeft ? "left" : await this.awaitPerson(this.abort.signal);
+          if (heard === "message") continue;
+          this.endChat(heard);
+          if (!this.running) {
+            reason = "chat";
+            this.supervisor.endedWithReply(ctx, opening, message.content?.trim(), worked, this.chatTranscript());
+            break;
+          }
+          continue;
+        }
+        // The person wrote while the model wrote this reply: it joins at the next step.
+        if (!message.tool_calls?.length && this.chatQueue.length) continue;
         if (!message.tool_calls?.length) {
           reason = "replied";
-          this.supervisor.endedWithReply(ctx, opening, message.content?.trim(), worked);
+          this.supervisor.endedWithReply(ctx, opening, message.content?.trim(), worked, this.chatTranscript());
           break;
         }
 
@@ -397,7 +475,8 @@ export class Loop {
         }
         if (end) {
           reason = "end_turn";
-          this.supervisor.endedWithSummary(ctx, opening, summary);
+          if (this.chatting) this.endChat("turn_ended");
+          this.supervisor.endedWithSummary(ctx, opening, summary, this.chatTranscript());
           break;
         }
       }
@@ -411,12 +490,19 @@ export class Loop {
       error = err instanceof Error ? err.message : String(err);
       return false;
     } finally {
-      const steps = Math.min(this.step, this.o.maxSteps);
+      const steps = Math.min(this.step, this.o.maxSteps + chatSteps);
+      if (this.chatting) this.endChat("turn_ended");
+      this.chatLeft = false;
       this.step = 0;
       this.live = undefined;
       this.busy = false;
       this.abort = undefined;
-      this.pauseFor = this.supervisor.ended({ worked, reason, prompt, next: ctx.next });
+      this.pauseFor = this.supervisor.ended({
+        worked: worked || this.chatLog.length > 0,
+        reason,
+        prompt,
+        next: ctx.next,
+      });
       this.save();
       this.emit({ type: "turn_ended", reason, next: ctx.next, ...(error && { error }) });
       log[reason === "error" ? "error" : "info"]("turn ended", {
@@ -428,6 +514,102 @@ export class Loop {
         ...(error && { error }),
       });
     }
+  }
+
+  /** Put the person's waiting chat messages in the context; the first opens the chat. */
+  private takeChat(): void {
+    if (!this.chatQueue.length) return;
+    const texts = this.chatQueue;
+    this.chatQueue = [];
+    const said = texts.join("\n\n");
+    const content = this.chatting
+      ? `[The person, in the chat] ${said}`
+      : `[The person, live in a chat: they wait for your answer] ${said}\n\n[five] Answer them with a plain reply, without a tool call: it goes to them, and this turn waits for their next message. Call tools first if the answer needs them — to look something up, or to change your goal, memory or prompt as they ask. Your turn's work resumes when they leave.`;
+    this.chatting = true;
+    this.ctx.messages.push({ role: "user", content });
+    this.save();
+    for (const text of texts) {
+      this.chatLog.push(`The person: ${clipLine(text)}`);
+      this.emit({ type: "chat", text });
+    }
+  }
+
+  /** Close the chat, telling the agent why when the turn goes on. */
+  private endChat(reason: ChatEnd): void {
+    if (!this.chatting) return;
+    this.chatting = false;
+    this.chatLeft = false;
+    if (reason !== "turn_ended") {
+      const why =
+        reason === "left"
+          ? "The person left the chat."
+          : `The person did not answer for ${this.supervisor.settings.chatWaitSeconds} seconds: the chat is over.`;
+      this.ctx.messages.push({
+        role: "user",
+        content: `[five] ${why} ${this.running ? "Carry on with this turn's work." : "The loop is paused: the turn ends here."}`,
+      });
+      this.save();
+    }
+    this.emit({ type: "chat_ended", reason });
+    this.o.log.info("chat ended", { reason });
+  }
+
+  /** Wait for the person's next chat message, until they leave, the wait runs out, or the turn is stopped. */
+  private awaitPerson(signal: AbortSignal): Promise<"message" | "left" | "timeout"> {
+    if (this.chatQueue.length) return Promise.resolve("message");
+    if (signal.aborted) return Promise.reject(new Error("stopped"));
+    const ms = this.supervisor.settings.chatWaitSeconds * 1000;
+    return new Promise((resolve, reject) => {
+      const done = (r: "message" | "left" | "timeout") => {
+        clearTimeout(timer);
+        signal.removeEventListener("abort", stopped);
+        this.chatWait = undefined;
+        resolve(r);
+      };
+      const stopped = () => {
+        clearTimeout(timer);
+        this.chatWait = undefined;
+        reject(new Error("stopped"));
+      };
+      const timer = setTimeout(() => done("timeout"), ms);
+      signal.addEventListener("abort", stopped, { once: true });
+      this.chatWait = { until: Date.now() + ms, done };
+    });
+  }
+
+  /** This turn's chat, for its fold; undefined when there was none. */
+  private chatTranscript(): string | undefined {
+    return this.chatLog.length ? this.chatLog.join("\n") : undefined;
+  }
+
+  /**
+   * The inbox for read_inbox: the latest messages, oldest first. The person's
+   * unread ones count as delivered now, so they do not come again before the
+   * next prompt — but for one sent as the prompt, which still becomes it.
+   */
+  private readInbox(last: number): string {
+    const { state } = this.o;
+    const messages = state.listInbox(last).reverse();
+    if (!messages.length) return "The inbox is empty: neither you nor the person has written yet.";
+    const fresh = messages.filter((m) => m.from === "person" && m.deliveredTurn === undefined && !m.asPrompt);
+    state.markDelivered(
+      fresh.map((m) => m.id),
+      this.ctx.turn,
+    );
+    const lines = messages.map((m) => {
+      const when = `turn ${m.turn}, ${m.at.slice(0, 16).replace("T", " ")} UTC`;
+      if (m.from === "five") return `[${when}] you → the person: ${m.subject ? `${m.subject} — ` : ""}${m.text}`;
+      const tag =
+        m.asPrompt && m.deliveredTurn === undefined
+          ? " (new: it will be your next turn's prompt)"
+          : fresh.includes(m)
+            ? " (new)"
+            : "";
+      return `[${when}] the person → you${tag}: ${m.text}`;
+    });
+    const total = state.inboxCounts();
+    const older = total.sent + total.received - messages.length;
+    return `${lines.join("\n\n")}${older > 0 ? `\n\n(${older} older; read_inbox with last shows more.)` : ""}`;
   }
 
   /**
@@ -536,6 +718,7 @@ export class Loop {
       endTurn,
       selfBlock: () => this.selfBlock(),
       sendMessage: (subject, text) => this.supervisor.sendMessage(this.ctx.turn, subject, text),
+      readInbox: (last) => this.readInbox(last),
       checkNext: (text) => this.supervisor.checkNext(text, this.turnPrompt),
       checkSelfNote: (length) => this.supervisor.checkSelfNote(length),
     };
@@ -567,6 +750,12 @@ export class Loop {
 
 function isFailure(result: string): boolean {
   return result.startsWith("error:") || result.startsWith("not saved:");
+}
+
+/** One side of a chat as a fold keeps it. */
+function clipLine(text: string, max = 600): string {
+  const t = text.trim().replace(/\s+/g, " ");
+  return t.length > max ? `${t.slice(0, max)}…` : t;
 }
 
 /** The end of a long text: what the status carries of a reply in progress. */

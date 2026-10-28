@@ -33,6 +33,8 @@ const paths: Record<IconName, string> = {
   reset: 'M4 12a8 8 0 1 0 3-6.2M4 4v4h4',
   image: 'M4 5h16v14H4zM4 16l5-5 4 4 3-3 4 4M15 9h.01',
   library: 'M5 4h4v16H5zM10 4h4v16h-4zM15.5 5.5l3.8-1 3.2 14.5-3.8 1z',
+  send: 'M4 12l16-8-6 16-3-7zM11 13l9-9',
+  leave: 'M14 4h6v16h-6M10 8l-4 4 4 4M6 12h10',
 };
 
 export function Icon({ name, size = 22 }: { name: IconName; size?: number }) {

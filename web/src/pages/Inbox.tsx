@@ -109,7 +109,7 @@ export function Inbox() {
                       ? `turn ${m.deliveredTurn}'s prompt`
                       : 'the next turn\'s prompt'
                     : m.deliveredTurn
-                      ? `read before turn ${m.deliveredTurn}`
+                      ? `read on turn ${m.deliveredTurn}`
                       : 'goes before the next turn'}
                 </span>
               )}
