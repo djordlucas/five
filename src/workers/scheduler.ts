@@ -14,6 +14,7 @@ import type { LibraryStore } from "../tools/libs.ts";
 import type { ToolStore } from "../tools/store.ts";
 import { Board, clip } from "./board.ts";
 import { ChatSession, chatForLead } from "./chat.ts";
+import { History } from "./history.ts";
 import { runLead } from "./lead.ts";
 import { ModelPool } from "./pool.ts";
 import { type Deps, Run, runScope } from "./run.ts";
@@ -88,6 +89,7 @@ export class Scheduler {
       pool: this.pool,
       settings: this.settings,
       workspace: o.workspace,
+      history: new History(o.workspace, log),
       log,
       emit,
       goal: () => o.state.getMeta("goal") || SEED_GOAL,
@@ -322,6 +324,9 @@ export class Scheduler {
       }
       this.active.delete(run.n);
       run.live = undefined;
+      // A failed run's changes to the workspace are put back.
+      const back = this.d.history?.end(run, outcome) ?? [];
+      if (back.length) error = `${error ?? outcome}\n[five put back the files it changed: ${back.join(", ")}]`;
       if (run.task) {
         // Five stopping: the task waits on the board for the next start.
         if (this.closing && outcome === "stopped") this.board.reopen(run.task.id);

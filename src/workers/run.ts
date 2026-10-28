@@ -11,6 +11,7 @@ import type { State } from "../state.ts";
 import type { LibraryStore } from "../tools/libs.ts";
 import type { ToolStore } from "../tools/store.ts";
 import type { Board } from "./board.ts";
+import type { History } from "./history.ts";
 import type { ModelPool } from "./pool.ts";
 import type { SettingsStore } from "./settings.ts";
 import type { WorkerStore } from "./store.ts";
@@ -26,6 +27,8 @@ export interface Deps {
   pool: ModelPool;
   settings: SettingsStore;
   workspace: string;
+  /** What runs changed, kept so a failed run's changes can be put back; none in a trial's scratch workspace. */
+  history?: History;
   log: Logger;
   /** Record an event of a run (0: of none). */
   emit(run: number, body: EventBody): void;

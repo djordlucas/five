@@ -12,6 +12,7 @@ import { createRunner, llmModule, type RunHandle, type Runner, toolsModule } fro
 import { State } from "./state.ts";
 import { LibraryStore } from "./tools/libs.ts";
 import { ToolStore } from "./tools/store.ts";
+import { HISTORY_DIR } from "./workers/history.ts";
 import { runScope } from "./workers/run.ts";
 import { Scheduler } from "./workers/scheduler.ts";
 import { AGENT_ID } from "./workers/tools.ts";
@@ -91,6 +92,8 @@ export function createFive(cfg: Config, model: ChatModel, log: Logger = noopLogg
     reset(opts = {}) {
       five.reset({
         clear: () => {
+          // Runs are numbered afresh: the history of the old ones goes.
+          fs.rmSync(path.join(cfg.workspace, HISTORY_DIR), { recursive: true, force: true });
           if (!opts.clean) return;
           // Run from the repo, the workspace is the repo: never delete that.
           if (fs.existsSync(path.join(cfg.workspace, ".git"))) {

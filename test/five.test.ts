@@ -10,6 +10,7 @@ import type {
   DbRows,
   DbTable,
   Event,
+  FileHistory,
   LibraryDetail,
   LibraryInfo,
   ProcessDetail,
@@ -740,8 +741,11 @@ test("define_worker: tried on a trial task first, refused for five's own workers
       if (steps === 0) {
         return {
           calls: [
-            ["define_worker", { name: "chat", description: "mine", code }],
-            ["define_worker", { name: "count", description: "Counts words.", code: "export const x = 1;" }],
+            ["define_worker", { name: "chat", description: "mine", code, test_input: "x" }],
+            [
+              "define_worker",
+              { name: "count", description: "Counts words.", code: "export const x = 1;", test_input: "x" },
+            ],
             [
               "define_worker",
               { name: "count", description: "Counts words. Input: the text.", code, test_input: "a b c" },
@@ -793,7 +797,7 @@ test("define_worker: tried on a trial task first, refused for five's own workers
   assert.match(results[1] ?? "", /^not saved: the code needs `export default/);
   assert.match(
     results[2] ?? "",
-    /^saved worker count \(revision 1\)[\s\S]*trial result:\ncounted 3 words, in count\.txt/,
+    /^saved worker count \(revision 1\)[\s\S]*trial result:\ncounted 3 words, in count\.txt\nThe trial wrote count\.txt \(on a copy of the workspace, now gone\)\./,
   );
   // A worker that works is not rewritten; one that returns nothing fails its trial.
   assert.match(results[4] ?? "", /^not saved: count works — 0 tasks done, none of its latest failed/);
@@ -979,4 +983,58 @@ test("write_file does not replace a file unless asked to, and every agent is tol
   assert.equal(fs.readFileSync(path.join(cfg.workspace, "news/day.md"), "utf8"), "mine");
   const first = model.requests[0]?.[0];
   assert.match(String(first?.content), /^Today is \w+day, \d{4}-\d\d-\d\d \(UTC\)\.[^\n]*\n\nYou are a test\./);
+});
+
+test("history: a failed run's changes are put back; a version can be read and restored", async () => {
+  const { five, cfg } = make([]);
+  const ws = (p: string) => path.join(cfg.workspace, p);
+  fs.mkdirSync(ws("news"));
+  fs.writeFileSync(ws("news/a.md"), "good");
+  const w = five.five.d.workers;
+  w.save({
+    name: "breaker",
+    description: "Breaks things.",
+    deps: {},
+    source:
+      'import { writeFileSync } from "node:fs";\nexport default async () => { writeFileSync("news/a.md", "broken"); fs.writeFileSync("news/b.md", "new"); throw new Error("oops"); };',
+  });
+  w.save({
+    name: "writer",
+    description: "Writes.",
+    deps: {},
+    source:
+      'export default async () => { fs.appendFileSync("news/a.md", " and more"); return "appended to news/a.md"; };',
+  });
+  five.five.settings.update({ minOpenTasks: 0 });
+  five.five.post({ worker: "breaker", title: "Break", input: "" });
+  five.five.start();
+  await until(() => five.five.board.counts().failed === 1, "the breaker to fail");
+  const failed = five.five.board.list()[0] as Task;
+  assert.match(failed.error ?? "", /oops[\s\S]*\[five put back the files it changed: news\/a\.md, news\/b\.md\]/);
+  assert.equal(fs.readFileSync(ws("news/a.md"), "utf8"), "good");
+  assert.ok(!fs.existsSync(ws("news/b.md")));
+
+  five.five.post({ worker: "writer", title: "Write", input: "" });
+  await until(() => five.five.board.counts().done === 1, "the writer");
+  five.five.pause();
+  assert.equal(fs.readFileSync(ws("news/a.md"), "utf8"), "good and more");
+
+  const { server, call, base } = await serve(five, cfg);
+  try {
+    const h = (await call<FileHistory>("GET", "/workspace/history?path=news/a.md")).body;
+    assert.deepEqual(
+      h.versions.map((v) => `${v.by}:${v.bytes}:${v.restored ?? false}`),
+      ["writer:4:false", "breaker:4:true"],
+    );
+    const id = h.versions[0]?.id ?? "";
+    assert.equal(await (await fetch(`${base}/workspace/history/file?path=news/a.md&id=${id}`)).text(), "good");
+    assert.equal((await call("POST", "/workspace/history/restore", { path: "news/a.md", id })).status, 200);
+    assert.equal(fs.readFileSync(ws("news/a.md"), "utf8"), "good");
+    // Restoring kept what it replaced: it can be undone.
+    const after = (await call<FileHistory>("GET", "/workspace/history?path=news/a.md")).body;
+    assert.deepEqual([after.versions[0]?.by, after.versions[0]?.bytes], ["person", 13]);
+    assert.equal((await call("POST", "/workspace/history/restore", { path: "../x", id })).status, 404);
+  } finally {
+    server.close();
+  }
 });

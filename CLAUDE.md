@@ -9,7 +9,7 @@
   `task.ts`), the board, the worker store, seeds, model slots, settings, tools
   and web helpers — plus `src/agent/media.ts` (images and PDFs),
   `src/tools/libs.ts` and `src/agent/builtins/libs.ts` (libraries),
-  `src/state.ts`, `src/api/server.ts`.
+  `src/workers/history.ts` and `src/runner/keep.ts` (the workspace's history), `src/state.ts`, `src/api/server.ts`.
 - Keep every model call small: an agent's context is built fresh, grows by
   appending only, and gets only the tools it needs. The lead and the chat are
   fixed; only task workers are the lead's to write.

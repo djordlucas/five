@@ -284,6 +284,30 @@ export interface WorkspaceEntry {
   sqlite?: boolean;
 }
 
+/**
+ * A file as it was before a run changed it (see src/workers/history.ts):
+ * the latest version of a file is the file itself.
+ */
+export interface FileVersion {
+  /** run-<n>, or person-<ms> for the version the person replaced by restoring another. */
+  id: string;
+  run?: number;
+  /** The worker whose run changed it, or "person". */
+  by: string;
+  task?: { id: number; title: string };
+  /** When that run ended. */
+  at: string;
+  /** The file's size before; null: the run made the file. */
+  bytes: number | null;
+  /** The run failed, and five put its changes back. */
+  restored?: boolean;
+}
+
+export interface FileHistory {
+  path: string;
+  versions: FileVersion[];
+}
+
 export interface WorkspaceDir {
   /** "" for the workspace itself. */
   path: string;

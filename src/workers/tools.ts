@@ -83,7 +83,7 @@ export function workspaceTools(d: Deps): AgentTool[] {
         },
         required: ["path", "content"],
       },
-      run: (a) =>
+      run: (a, run) =>
         guard(() => {
           const later = futureDate(str(a.path));
           if (later) return `error: ${later}`;
@@ -96,6 +96,7 @@ export function workspaceTools(d: Deps): AgentTool[] {
               if (!(err instanceof WorkspaceError && err.status === 404)) throw err;
             }
           }
+          d.history?.before(run.n, str(a.path));
           const e = w.write(str(a.path), Buffer.from(str(a.content)));
           return `wrote ${e.path} (${e.bytes} bytes)`;
         }),
@@ -109,7 +110,7 @@ export function workspaceTools(d: Deps): AgentTool[] {
         properties: { path: { type: "string" }, content: { type: "string" } },
         required: ["path", "content"],
       },
-      run: (a) =>
+      run: (a, run) =>
         guard(() => {
           const w = ws();
           let before = "";
@@ -120,6 +121,7 @@ export function workspaceTools(d: Deps): AgentTool[] {
           }
           const sep = before && !before.endsWith("\n") ? "\n" : "";
           const add = str(a.content);
+          d.history?.before(run.n, str(a.path));
           const e = w.write(str(a.path), Buffer.from(before + sep + (add.endsWith("\n") ? add : `${add}\n`)));
           return `appended to ${e.path} (${e.bytes} bytes now)`;
         }),

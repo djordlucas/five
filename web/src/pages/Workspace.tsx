@@ -6,6 +6,7 @@ import {
   type DbRows,
   type DbTable,
   del,
+  type FileHistory,
   get,
   message,
   post,
@@ -427,7 +428,96 @@ function FileView(props: { path: string; file: Loaded; onChanged: () => void }) 
           Download it to open it, or upload a new version in its directory.
         </p>
       )}
+      <History
+        path={path}
+        version={file.version}
+        onRestored={async () => {
+          const r = await readFile(path);
+          if (r) setFile({ size: r.buf.byteLength, text: asText(r.buf), version: version(r.version), modified: r.modified });
+          setDraft(null);
+          setNotice('Restored. What it replaced is in its history too.');
+          props.onChanged();
+        }}
+      />
     </article>
+  );
+}
+
+/**
+ * A file's history: the file as it was before each run that changed it. A
+ * failed run's changes were put back already; any version can be put back.
+ */
+function History(props: { path: string; version?: string; onRestored: () => Promise<void> }) {
+  const { path } = props;
+  const [h, setH] = useState<FileHistory | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    get<FileHistory>(`/workspace/history?path=${encodeURIComponent(path)}`).then(setH, (err: unknown) => setError(message(err)));
+  }, [path, props.version]);
+  if (error) return <p class="error">{error}</p>;
+  if (!h || h.versions.length === 0) return null;
+
+  const restore = async (id: string, what: string) => {
+    if (!confirm(`Put back ${path} as it was ${what}?`)) return;
+    setBusy(true);
+    try {
+      await post('/workspace/history/restore', { path, id });
+      await props.onRestored();
+    } catch (err) {
+      setError(message(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <details class={styles.history}>
+      <summary>
+        <Icon name="clock" size={16} />
+        History <span class="muted">{h.versions.length}</span>
+      </summary>
+      <ol>
+        {h.versions.map((v) => {
+          const what = v.run !== undefined ? `before run ${v.run}` : 'before you restored another version';
+          return (
+            <li key={v.id}>
+              <span class={styles.historyWhat}>
+                <strong>{what}</strong>
+                <span class="muted">
+                  {[
+                    v.by === 'person' ? 'you' : v.by,
+                    v.task && `task #${v.task.id} ${v.task.title}`,
+                    ago(v.at),
+                    v.bytes === null ? 'the run made the file' : bytes(v.bytes),
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')}
+                </span>
+                {v.restored && <Badge state="failed">failed, put back</Badge>}
+              </span>
+              <span class={styles.historyActions}>
+                {v.bytes !== null && (
+                  <a
+                    class={ui.action}
+                    href={`/api/v1/workspace/history/file?path=${encodeURIComponent(path)}&id=${v.id}`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    <Icon name="file" size={16} />
+                    View
+                  </a>
+                )}
+                <button type="button" class={ui.action} disabled={busy} onClick={() => void restore(v.id, what)}>
+                  <Icon name="reset" size={16} />
+                  {v.bytes === null ? 'Remove the file' : 'Restore'}
+                </button>
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+    </details>
   );
 }
 

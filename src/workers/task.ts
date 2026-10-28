@@ -56,6 +56,9 @@ export async function runWorker(
     log: run.log,
     host: hostFor(d, run),
     label: `worker ${worker.meta.name}`,
+    cwd: d.workspace,
+    // Its writes are kept first, so a failed run's can be put back.
+    ...(d.history && { env: { FIVE_KEEP_DIR: d.history.dir(run.n) } }),
   });
   const r = await awaitRun(handle, run.signal);
   run.live = undefined;
@@ -119,6 +122,8 @@ function hostFor(d: Deps, run: Run): HostModules {
     },
     board: {
       post: inRun(async (worker: unknown, title: unknown, input: unknown) => {
+        // A trial's tasks are not posted: it is a try, not work.
+        if (!d.history) return 0;
         const w = String(worker ?? "");
         if (!d.workers.get(w)) throw new Error(`no task worker named "${w}"`);
         const t = String(title ?? "").trim();
