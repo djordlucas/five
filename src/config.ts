@@ -69,6 +69,7 @@ function settingsDefaults(env: NodeJS.ProcessEnv): Settings {
     taskRuns: int(env.FIVE_TASK_RUNS, DEFAULTS.taskRuns),
     maxSteps: Math.max(1, int(env.FIVE_MAX_STEPS, DEFAULTS.maxSteps)),
     runTokens: Math.max(1000, int(env.FIVE_RUN_TOKENS, DEFAULTS.runTokens)),
+    feedsEverySeconds: int(env.FIVE_FEEDS_EVERY, DEFAULTS.feedsEverySeconds),
   };
 }
 

@@ -84,7 +84,7 @@ afterEach(async () => {
 
 function make(replies: Reply[] | ((req: CompletionRequest, n: number) => Reply), env: Record<string, string> = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "five-test-"));
-  const cfg = loadConfig({ FIVE_WORKSPACE: dir, FIVE_TICK_MS: "20", ...env });
+  const cfg = loadConfig({ FIVE_WORKSPACE: dir, FIVE_TICK_MS: "20", FIVE_FEEDS_EVERY: "0", ...env });
   const model = scripted(replies);
   const five = createFive(cfg, model);
   open.push(five);
@@ -162,6 +162,16 @@ test("the board: tasks posted, taken oldest first, finished; a task running when
   assert.equal(board.cancel(b.id), false, "a running task cannot be cancelled");
   assert.match(board.summary(), /#2 \[running\] feeds: B[\s\S]*Latest ended:\n- #1 research: A → found it/);
   assert.deepEqual(board.tally("research"), { done: 1, failed: 0 });
+  // A task like one open, running or just done is found: by its story, or a title saying much the same.
+  board.post({ worker: "research", title: "Monitor inflation data in Europe", input: "", by: "lead" });
+  board.post({ worker: "research", title: "Kherson ceasefire", input: "story: kherson-ceasefire", by: "lead" });
+  const like = (title: string, input = "", worker = "research") => board.alike({ worker, title, input })?.id;
+  assert.equal(like("Track European inflation data"), 3);
+  assert.equal(like("Anything", "story: kherson-ceasefire"), 4);
+  assert.equal(like("a"), a.id, "just done");
+  assert.equal(like("Monitor inflation data in Europe", "", "feeds"), undefined, "another worker");
+  assert.equal(like("Track the election in Brazil"), undefined);
+  assert.equal(board.latest("research")?.id, 4);
   state.close();
   // Five stopped with B running: it is open again.
   const again = new State(path.join(dir, "five.db"));
@@ -628,7 +638,7 @@ test("the lead posts a task; the research worker does it through five.llm.agent,
   const site = http.createServer((_req, res) => {
     res.setHeader("content-type", "text/html");
     res.end(
-      "<html><body><p>X is the twenty-fourth letter of the Latin alphabet, used in many languages.</p></body></html>",
+      "<html><body><p>X is the twenty-fourth letter of the Latin alphabet, used in many languages.</p><p>In English it is pronounced like ks, as in the word box.</p></body></html>",
     );
   });
   await new Promise<void>((r) => site.listen(0, "127.0.0.1", r));
@@ -653,6 +663,14 @@ test("the lead posts a task; the research worker does it through five.llm.agent,
           facts: [
             { fact: "X is the 24th letter.", url, quote: "X is the twenty-fourth letter of the Latin alphabet" },
             { fact: "X was invented in 1900.", url, quote: "The letter X was invented by a committee in 1900." },
+            // On the page the agent read, not the one it names: kept, with the page it is on.
+            {
+              fact: "X sounds like ks.",
+              url: "https://elsewhere.invalid/x",
+              quote: "In English it is pronounced like ks, as in the word box.",
+            },
+            // Said twice: kept once.
+            { fact: "X is a letter.", url, quote: "X is the twenty-fourth letter of the Latin alphabet" },
           ],
           watch: "Whether Y follows.",
         }),
@@ -672,13 +690,13 @@ test("the lead posts a task; the research worker does it through five.llm.agent,
   assert.deepEqual([task.worker, task.status, task.postedBy], ["research", "done", "lead"]);
   assert.match(
     task.result ?? "",
-    /^1 checked facts added to news\/stories\/letter-x\.md \(story: letter-x\)\. 1 dropped/,
+    /^2 checked facts added to news\/stories\/letter-x\.md \(story: letter-x\)\. 1 dropped/,
   );
   const day = new Date().toISOString().slice(0, 10);
   const story = fs.readFileSync(path.join(cfg.workspace, "news/stories/letter-x.md"), "utf8");
   assert.equal(
     story,
-    `# Find what X is\n\n## ${day}\n\n- X is the 24th letter. ([source](${url}): “X is the twenty-fourth letter of the Latin alphabet”)\n- Watch: Whether Y follows.\n`,
+    `# Find what X is\n\n## ${day}\n\n- X is the 24th letter. ([source](${url}): “X is the twenty-fourth letter of the Latin alphabet”)\n- X sounds like ks. ([source](${url}): “In English it is pronounced like ks, as in the word box.”)\n- Watch: Whether Y follows.\n`,
   );
   assert.match(
     fs.readFileSync(path.join(cfg.workspace, "news/index.md"), "utf8"),
@@ -957,6 +975,19 @@ test("the API: status, the board, settings, the goal, the inbox, and a reset", a
   } finally {
     server.close();
   }
+});
+
+test("five posts a feeds task on time", async () => {
+  const { five } = make(() => ({ content: "ok" }), { FIVE_FEEDS_EVERY: "900" });
+  five.five.settings.update({ taskRuns: 0, minOpenTasks: 0 });
+  five.five.start();
+  await new Promise((r) => setTimeout(r, 200));
+  five.five.pause();
+  // One task, by five: the next waits for it to end and its time to come.
+  assert.deepEqual(
+    five.five.board.list().map((t) => [t.worker, t.title, t.postedBy]),
+    [["feeds", "Read the news feeds", "five"]],
+  );
 });
 
 test("the seed task workers are modules with a default export", async () => {

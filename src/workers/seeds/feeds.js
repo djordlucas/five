@@ -1,5 +1,7 @@
 // News feeds into today's digest. Code fetches, parses and remembers what it
-// has seen; the model only picks what matters, in small batches.
+// has seen; the model only picks what matters, in small batches, and weighs
+// it. The weightiest new items become research tasks: what to follow comes
+// from the news, not from what a model remembers.
 const DEFAULT_FEEDS = [
   "https://feeds.bbci.co.uk/news/world/rss.xml",
   "https://www.theguardian.com/world/rss",
@@ -9,6 +11,10 @@ const DEFAULT_FEEDS = [
 const SEEN = "news/seen.json";
 const LOCK = "news/.feeds.lock";
 const BATCH = 15;
+/** Research tasks one run posts at most, for its weightiest new items. */
+const FOLLOW = 3;
+/** The weight, from 1 to 5, an item needs to be followed. */
+const FOLLOW_WEIGHT = 4;
 /** A lock older than this was left by a run that died. */
 const STALE_MS = 15 * 60_000;
 
@@ -68,7 +74,7 @@ async function digest(task) {
       .map((it, n) => `${n}. ${it.title}${it.summary ? ` — ${it.summary.slice(0, 160)}` : ""}`)
       .join("\n");
     const out = await five.llm.ask(
-      `Headlines:\n${list}\n\nWhich of these are significant world news? For each, give its number and one factual line on what happened, from the headline and summary only.`,
+      `Headlines:\n${list}\n\nWhich of these are significant world news? For each, give its number, one factual line on what happened, from the headline and summary only, and its weight: 5 for news that changes things for many countries or millions of people, 1 for local news.`,
       {
         system:
           "You pick significant world news from headlines. Be factual and brief. Skip opinion, sport and entertainment.",
@@ -79,8 +85,12 @@ async function digest(task) {
               type: "array",
               items: {
                 type: "object",
-                properties: { n: { type: "integer" }, line: { type: "string" } },
-                required: ["n", "line"],
+                properties: {
+                  n: { type: "integer" },
+                  line: { type: "string" },
+                  weight: { type: "integer", minimum: 1, maximum: 5 },
+                },
+                required: ["n", "line", "weight"],
               },
             },
           },
@@ -90,7 +100,7 @@ async function digest(task) {
     );
     for (const p of out.items ?? []) {
       const it = batch[p.n];
-      if (it) picked.push({ ...it, line: p.line });
+      if (it && !picked.includes(it)) picked.push({ ...it, line: p.line, weight: Number(p.weight) || 1 });
     }
   }
   const day = new Date().toISOString().slice(0, 10);
@@ -100,10 +110,25 @@ async function digest(task) {
   // Seen only once the model has been through them: a failed run leaves them for the next.
   for (const it of fresh) seen.add(it.link);
   fs.writeFileSync(SEEN, JSON.stringify([...seen].slice(-5000)));
-  // The top headlines, for the lead to pick stories from.
+  // The weightiest, followed: a research task each. One like a task already on the board is not posted again.
+  const posted = [];
+  for (const p of [...picked].sort((a, b) => b.weight - a.weight)) {
+    if (posted.length >= FOLLOW || p.weight < FOLLOW_WEIGHT) break;
+    try {
+      const id = await five.board.post(
+        "research",
+        p.line.slice(0, 200),
+        `${p.title}${p.summary ? `\n${p.summary}` : ""}\nFirst reported: ${p.link}`,
+      );
+      if (id) posted.push(`#${id} ${p.line}`);
+    } catch {
+      // The same story is on the board already.
+    }
+  }
   const top = picked
     .slice(0, 6)
     .map((p) => `\n- ${p.line}`)
     .join("");
-  return `${fresh.length} new items; ${picked.length} added to ${file}.${said}${top ? `\nTop of them:${top}` : ""}`;
+  const follow = posted.length ? `\nResearch tasks posted:${posted.map((p) => `\n- ${p}`).join("")}` : "";
+  return `${fresh.length} new items; ${picked.length} added to ${file}.${said}${follow}${top ? `\nTop of them:${top}` : ""}`;
 }

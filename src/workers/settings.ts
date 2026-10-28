@@ -53,6 +53,15 @@ export const FIELDS: SettingField[] = [
     help: "Even with enough open tasks, the lead runs this often, to read results and change course.",
   },
   {
+    key: "feedsEverySeconds",
+    group: "Workers",
+    label: "Read the feeds every",
+    unit: "seconds",
+    min: 0,
+    max: 86_400,
+    help: "Five posts a task for the feeds worker this often, when none is on the board: the news comes in on time, whatever the lead does. 0: only when the lead posts one.",
+  },
+  {
     key: "taskTimeoutSeconds",
     group: "Workers",
     label: "A task run may take",
@@ -115,6 +124,7 @@ export const DEFAULTS: Settings = {
   minOpenTasks: 4,
   maxWorkers: 4,
   leadEverySeconds: 600,
+  feedsEverySeconds: 900,
   taskTimeoutSeconds: 600,
   maxSteps: 12,
   runTokens: 12_000,

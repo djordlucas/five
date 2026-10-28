@@ -7,6 +7,16 @@ const TIMEOUT_MS = 20_000;
 /** The most of a page kept: a tool result is cut to fit the context after that. */
 const MAX_TEXT = 60_000;
 
+/** A URL as a key: the same page with or without www, a slash at the end or a fragment. */
+export function pageKey(url: string): string {
+  return url
+    .trim()
+    .replace(/#.*$/, "")
+    .replace(/^https?:\/\/(www\.)?/i, "")
+    .replace(/\/+$/, "")
+    .toLowerCase();
+}
+
 export interface FeedItem {
   title: string;
   link: string;

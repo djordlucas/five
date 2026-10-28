@@ -23,6 +23,8 @@ import { type Settings, SettingsStore } from "./settings.ts";
 import { WorkerStore } from "./store.ts";
 import { runWorker } from "./task.ts";
 
+/** The worker five posts a task for every feedsEverySeconds. */
+const FEEDS = "feeds";
 /** The lead runs at most this often for a board running low. */
 const LEAD_COOLDOWN_MS = 30_000;
 /** The longest a status shows of a reply in progress. */
@@ -252,9 +254,12 @@ export class Scheduler {
     const runs = [...this.active.values()].map((a) => a.run);
     const leading = runs.some((r) => r.kind === "lead");
     const now = Date.now();
+    this.readFeeds(s, now);
     const counts = this.board.counts();
-    const low = counts.open < s.minOpenTasks && now - this.lastLead >= LEAD_COOLDOWN_MS;
-    const due = now - this.lastLead >= s.leadEverySeconds * 1000;
+    // A new five's lead waits for its workers' first results, to plan from them rather than from memory.
+    const ready = counts.done + counts.failed > 0 || counts.running === 0;
+    const low = ready && counts.open < s.minOpenTasks && now - this.lastLead >= LEAD_COOLDOWN_MS;
+    const due = this.lastLead ? now - this.lastLead >= s.leadEverySeconds * 1000 : ready;
     if (!leading && (low || due || (this.leadWanted && now - this.lastLead >= 5_000))) this.startLead();
 
     let tasks = runs.filter((r) => r.kind === "task").length;
@@ -264,6 +269,17 @@ export class Scheduler {
       tasks++;
       this.startTask(task.run, task);
     }
+  }
+
+  /** The feeds, read on time: a task for the feeds worker when it has none and its last is old enough. */
+  private readFeeds(s: Settings, now: number): void {
+    if (!s.feedsEverySeconds || !this.workers.get(FEEDS)) return;
+    const last = this.board.latest(FEEDS);
+    if (last && (last.status === "open" || last.status === "running")) return;
+    if (last && now - Date.parse(last.createdAt) < s.feedsEverySeconds * 1000) return;
+    const t = { worker: FEEDS, title: "Read the news feeds", input: "" };
+    const task = this.board.post({ ...t, by: "five" });
+    this.emit({ type: "task", action: "posted", id: task.id, worker: FEEDS, title: t.title, by: "five" });
   }
 
   private startLead(): void {

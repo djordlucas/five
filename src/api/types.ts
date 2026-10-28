@@ -388,6 +388,7 @@ export interface Settings {
   slots: number;
   taskRuns: number;
   leadEverySeconds: number;
+  feedsEverySeconds: number;
   minOpenTasks: number;
   maxWorkers: number;
   maxSteps: number;

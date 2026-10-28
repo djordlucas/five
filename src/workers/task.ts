@@ -7,6 +7,8 @@
 //   five.llm.agent({ prompt, system?, tools?, maxSteps? })   a small agent with
 //       the tools named (the workspace and web ones by default); its answer
 //   five.web.text(url) · five.web.feed(url) · five.web.search(query)
+//   five.web.read()   what this run's agents read: [{ url, text }], pages and
+//       search results, to check their reports against
 //   five.board.post(worker, title, input?)                  a task for another worker
 //
 // and Node's own fs, fetch and the rest, in the workspace.
@@ -18,7 +20,7 @@ import { runAgent, today } from "./agent.ts";
 import { clip, MAX_INPUT, MAX_TITLE } from "./board.ts";
 import { type Deps, type Run, runScope } from "./run.ts";
 import type { StoredWorker } from "./store.ts";
-import { toolsByName } from "./tools.ts";
+import { sameTask, toolsByName } from "./tools.ts";
 import { fetchFeed, fetchText, searchWeb } from "./web.ts";
 
 /** The tools llm.agent gets when the worker names none. */
@@ -119,6 +121,8 @@ function hostFor(d: Deps, run: Run): HostModules {
       text: inRun(async (url: unknown) => fetchText(String(url), run.signal)),
       feed: inRun(async (url: unknown) => fetchFeed(String(url), run.signal)),
       search: inRun(async (q: unknown) => searchWeb(String(q), run.signal)),
+      // What this run's agents read: to check what they report against it.
+      read: inRun(async () => [...run.read.values()]),
     },
     board: {
       post: inRun(async (worker: unknown, title: unknown, input: unknown) => {
@@ -130,6 +134,8 @@ function hostFor(d: Deps, run: Run): HostModules {
         if (!t || t.length > MAX_TITLE) throw new Error(`a title is 1 to ${MAX_TITLE} characters`);
         const i = typeof input === "string" ? input : input === undefined ? "" : JSON.stringify(input);
         if (i.length > MAX_INPUT) throw new Error(`an input is at most ${MAX_INPUT} characters`);
+        const same = d.board.alike({ worker: w, title: t, input: i });
+        if (same) throw new Error(`not posted: ${sameTask(same)}`);
         const task = d.board.post({ worker: w, title: t, input: i, by: run.worker });
         run.emit({ type: "task", action: "posted", id: task.id, worker: w, title: t, by: run.worker });
         return task.id;

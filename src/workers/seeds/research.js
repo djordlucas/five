@@ -1,11 +1,21 @@
 // One story, researched. A small agent searches and reads, and reports each
 // fact with a sentence copied from its page; code keeps only the facts whose
-// sentence it finds on that page, and adds them to the story's file under
-// today's date. The model finds and words; code checks and writes.
+// sentence is in what the agent read — the page it names first, then any other
+// it read, which then becomes the fact's source — and adds them to the story's
+// file under today's date. The model finds and words; code checks and writes.
 const STORIES = "news/stories";
 const INDEX = "news/index.md";
 /** Words in a row a quote must share with its page, when it is not there whole. */
 const RUN = 8;
+
+/** A URL as a key: with or without www, a slash at the end or a fragment. */
+const key = (url) =>
+  String(url)
+    .trim()
+    .replace(/#.*$/, "")
+    .replace(/^https?:\/\/(www\.)?/i, "")
+    .replace(/\/+$/, "")
+    .toLowerCase();
 
 const norm = (s) =>
   String(s ?? "")
@@ -101,19 +111,36 @@ export default async ({ task }) => {
     },
   );
 
-  const pages = new Map();
+  // What the agent read, the page each fact names first; the page fetched again when the agent read none of it.
+  const read = (await five.web.read()).map((r) => ({ url: r.url, key: key(r.url), text: norm(r.text) }));
+  const fetched = new Map();
   const kept = [];
+  // The story's file has some already, from an earlier run.
+  const quotes = new Set();
+  const had = norm(before);
   let dropped = 0;
+  let known = 0;
   for (const f of out.facts ?? []) {
-    if (!/^https?:\/\//.test(f.url ?? "")) {
-      dropped++;
-      continue;
+    const named = key(f.url ?? "");
+    let source = [...read.filter((r) => r.key === named), ...read.filter((r) => r.key !== named)].find((r) =>
+      onPage(r.text, f.quote),
+    )?.url;
+    if (!source && /^https?:\/\//.test(f.url ?? "") && !read.some((r) => r.key === named)) {
+      if (!fetched.has(named)) fetched.set(named, await five.web.text(f.url).then(norm, () => ""));
+      if (onPage(fetched.get(named), f.quote)) source = f.url;
     }
-    if (!pages.has(f.url)) pages.set(f.url, await five.web.text(f.url).then(norm, () => ""));
-    if (onPage(pages.get(f.url), f.quote)) kept.push(f);
-    else dropped++;
+    if (source && had.includes(norm(f.quote))) known++;
+    else if (source && !quotes.has(norm(f.quote))) {
+      quotes.add(norm(f.quote));
+      kept.push({ ...f, url: source });
+    } else if (!source) dropped++;
   }
-  const why = dropped ? ` ${dropped} dropped: their sentence is not on the page they name.` : "";
+  const why = [
+    dropped && ` ${dropped} dropped: their sentence is in nothing the agent read.`,
+    known && ` ${known} already in the story.`,
+  ]
+    .filter(Boolean)
+    .join("");
   if (!kept.length) return `Nothing added to ${file}: no fact could be checked against its source.${why}`;
 
   const day = new Date().toISOString().slice(0, 10);

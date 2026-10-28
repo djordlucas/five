@@ -11,6 +11,14 @@ import type { State } from "../state.ts";
 /** The longest title, and input, a task takes. */
 export const MAX_TITLE = 200;
 export const MAX_INPUT = 8000;
+/** A task done this recently still counts as the same work, for a new one like it. */
+const SAME_WORK_MS = 30 * 60_000;
+/** Words that say how, not what: two tasks sharing only these are not alike. */
+const HOW = new Set(
+  "the and for with from into about what that this its their new latest news story stories update updates follow track monitor investigate research find check report reports breaking ongoing developments development".split(
+    " ",
+  ),
+);
 
 export class Board {
   private readonly state: State;
@@ -91,7 +99,37 @@ export class Board {
     };
   }
 
-  /** Tasks a worker did, and failed. */
+  /**
+   * A task like this one, already open, running or just done: the same
+   * worker, the same story, or a title saying much the same. Small models post
+   * the same task again and again.
+   */
+  alike(t: { worker: string; title: string; input: string }): Task | undefined {
+    const since = new Date(Date.now() - SAME_WORK_MS).toISOString();
+    const rows = this.state.db
+      .prepare(
+        "SELECT * FROM tasks WHERE worker = ? AND (status IN ('open', 'running') OR (status = 'done' AND ended_at >= ?)) ORDER BY id DESC",
+      )
+      .all(t.worker, since)
+      .map((r) => toTask(r as Row));
+    const story = storyOf(t.input);
+    const words = keyWords(t.title);
+    return rows.find((o) => {
+      if (story && storyOf(o.input) === story) return true;
+      if (o.title.trim().toLowerCase() === t.title.trim().toLowerCase()) return true;
+      const theirs = keyWords(o.title);
+      const shared = [...words].filter((w) => theirs.has(w)).length;
+      const fewer = Math.min(words.size, theirs.size);
+      return fewer > 0 && (shared === fewer || (shared >= 2 && shared / fewer >= 0.6));
+    });
+  }
+
+  /** A worker's newest task. */
+  latest(worker: string): Task | undefined {
+    const row = this.state.db.prepare("SELECT * FROM tasks WHERE worker = ? ORDER BY id DESC LIMIT 1").get(worker);
+    return row ? toTask(row as Row) : undefined;
+  }
+
   /** How many of a worker's latest finished tasks failed. */
   recentFailures(worker: string, latest = 5): number {
     const row = this.state.db
@@ -165,6 +203,22 @@ function toTask(x: Row): Task {
     ...(endedAt !== undefined && { endedAt }),
     ...(x.run !== null && x.run !== undefined && { run: Number(x.run) }),
   };
+}
+
+/** The story a task names in its input, `story: <slug>`. */
+function storyOf(input: string): string | undefined {
+  return /\bstory:\s*([\w-]+)/i.exec(input)?.[1]?.toLowerCase();
+}
+
+/** A title's words that say what it is about. */
+function keyWords(title: string): Set<string> {
+  return new Set(
+    title
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((w) => w.length > 2 && !HOW.has(w))
+      .map((w) => w.replace(/s$/, "")),
+  );
 }
 
 export function oneLine(s: string): string {

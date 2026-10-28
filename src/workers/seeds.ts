@@ -12,13 +12,13 @@ export const SEEDS: { name: string; description: string; source: string }[] = [
   {
     name: "research",
     description:
-      "Researches one news story with a small agent, and adds what it finds to the story's file, news/stories/<slug>.md, under today's date — only the facts whose quoted sentence code finds on the source page — then updates news/index.md. Title: what to find out. Input: the details, and `story: <slug>` to add to a story already followed (it picks or starts one otherwise). Result: how many checked facts it added, how many it dropped, and the file.",
+      "Researches one news story with a small agent, and adds what it finds to the story's file, news/stories/<slug>.md, under today's date — only the facts whose quoted sentence code finds in the pages the agent read — then updates news/index.md. Title: what to find out. Input: the details, and `story: <slug>` to add to a story already followed (it picks or starts one otherwise). Result: how many checked facts it added, how many it dropped, and the file.",
     source: source("research"),
   },
   {
     name: "feeds",
     description:
-      'Reads world-news feeds (RSS, Atom), keeps the items it has not seen before, asks the model which matter, and appends those — one factual line each, with the link — to today\'s digest, news/<YYYY-MM-DD>.md. Leave the input empty: its default feeds work. "Up to date" means nothing new since the last run, which is normal. Result: how many items were new and how many were added.',
+      'Reads world-news feeds (RSS, Atom), keeps the items it has not seen before, asks the model which matter, and appends those — one factual line each, with the link — to today\'s digest, news/<YYYY-MM-DD>.md; it posts research tasks for the weightiest. Five posts it a task every few minutes. Leave the input empty: its default feeds work. "Up to date" means nothing new since the last run, which is normal. Result: how many items were new and how many were added.',
     source: source("feeds"),
   },
 ];
