@@ -66,6 +66,10 @@ export interface EvalOptions {
   deps?: Record<string, string>;
   timeoutMs?: number;
   log?: Logger;
+  /** Host functions for this run only, over the runner's own: a task worker's, bound to its run. */
+  host?: HostModules;
+  /** What the run is, when it is not run_js code: a task worker's name. */
+  label?: string;
 }
 
 export interface Runner {
@@ -109,7 +113,7 @@ export function createRunner(opts: RunnerOptions): Runner {
         memoryMb: opts.memoryMb ?? DEFAULT_MEMORY_MB,
         env: { ...process.env, ...opts.env },
       }),
-    startEval(source, { args, deps, timeoutMs, log } = {}) {
+    startEval(source, { args, deps, timeoutMs, log, host } = {}) {
       // Installing comes first and can take a while, so the handle exists
       // before the process does; a kill during the install cancels the run.
       const startedAt = Date.now();
@@ -140,7 +144,7 @@ export function createRunner(opts: RunnerOptions): Runner {
             file,
             args,
             cwd: opts.cwd,
-            host: opts.host ?? {},
+            host: { ...opts.host, ...host },
             timeoutMs: timeoutMs ?? opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
             memoryMb: opts.memoryMb ?? DEFAULT_MEMORY_MB,
             env: { ...process.env, ...opts.env },

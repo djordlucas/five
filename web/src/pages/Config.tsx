@@ -1,31 +1,27 @@
 import { useEffect, useState } from 'preact/hooks';
-import { del, get, message, put, type SupervisorField, type SupervisorSettings, type SupervisorView } from '../api/client';
+import { del, get, message, put, type SettingField, type Settings, type SettingsView } from '../api/client';
 import { status } from '../live';
 import { Icon } from '../components/Icon';
 import type { IconName } from '../sections';
 import styles from './Config.module.css';
 
-type Draft = Partial<Record<keyof SupervisorSettings, number | boolean>>;
+type Draft = Partial<Record<keyof Settings, number | boolean>>;
 
 /**
- * Every way five steps into the loop, and its settings: change them while the
- * loop runs. A change applies from the next time it is checked — most at the
- * next turn — and is kept across restarts; the defaults come from the
- * environment.
+ * Five's goal, and how it schedules its workers: change them while it runs. A
+ * change applies at the next decision and is kept across restarts; the
+ * defaults come from the environment.
  */
 export function Config() {
-  const [view, setView] = useState<SupervisorView | null>(null);
+  const [view, setView] = useState<SettingsView | null>(null);
   const [draft, setDraft] = useState<Draft>({});
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  // Reloaded as turns pass, for the counts.
-  const turn = status.value?.loop.turn;
-
   useEffect(() => {
-    get<SupervisorView>('/supervisor').then(setView, (err: unknown) => setError(message(err)));
-  }, [turn]);
+    get<SettingsView>('/settings').then(setView, (err: unknown) => setError(message(err)));
+  }, []);
 
-  const act = async (fn: () => Promise<SupervisorView>) => {
+  const act = async (fn: () => Promise<SettingsView>) => {
     setSaving(true);
     try {
       setView(await fn());
@@ -41,7 +37,7 @@ export function Config() {
   if (!view) return error ? <p class="card error">{error}</p> : <p class="card muted">Loading…</p>;
   const dirty = Object.keys(draft).length > 0;
   const groups = [...new Set(view.fields.map((f) => f.group))];
-  const set = (key: keyof SupervisorSettings, value: number | boolean) => {
+  const set = (key: keyof Settings, value: number | boolean) => {
     const next = { ...draft };
     if (value === view.settings[key]) delete next[key];
     else next[key] = value;
@@ -50,10 +46,9 @@ export function Config() {
 
   return (
     <div class={styles.page}>
+      <Goal />
       <p class={`card muted ${styles.intro}`}>
-        How five steps into the agent's loop. A change applies from the next time it is checked — most at the next turn
-        — and is kept across restarts. Now: {count(view.state.idle, 'idle turn')} in a row; the next prompt unchanged for{' '}
-        {count(view.state.stale, 'turn')}.
+        How five schedules its workers. A change applies at the next decision, and is kept across restarts.
       </p>
 
       {groups.map((g) => (
@@ -85,7 +80,7 @@ export function Config() {
           class={styles.action}
           disabled={saving || view.changed.length === 0}
           onClick={() => {
-            if (confirm('Put every setting back to its default?')) void act(() => del<SupervisorView>('/supervisor'));
+            if (confirm('Put every setting back to its default?')) void act(() => del<SettingsView>('/settings'));
           }}
         >
           Reset to defaults
@@ -98,7 +93,7 @@ export function Config() {
           type="button"
           class="button"
           disabled={!dirty || saving}
-          onClick={() => void act(() => put<SupervisorView>('/supervisor', draft))}
+          onClick={() => void act(() => put<SettingsView>('/settings', draft))}
         >
           {saving ? 'Saving…' : `Apply${dirty ? ` (${Object.keys(draft).length})` : ''}`}
         </button>
@@ -109,17 +104,62 @@ export function Config() {
 
 /** An icon for each group of settings. */
 const groupIcons: Record<string, IconName> = {
-  'Working memory': 'layers',
-  'Turn endings': 'flag',
-  'Idle turns': 'clock',
-  'Next prompt': 'next',
-  'Self and inbox': 'person',
-  Results: 'file',
+  Model: 'chip',
+  Workers: 'layers',
+  Runs: 'clock',
   Chat: 'chat',
 };
 
+/** The goal every worker's work is for: the lead plans from it, and may sharpen it. */
+function Goal() {
+  const goal = status.value?.goal ?? '';
+  const [text, setText] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const editing = text !== null;
+  const save = async () => {
+    try {
+      await put('/goal', { goal: text });
+      setText(null);
+      setError(null);
+    } catch (err) {
+      setError(message(err));
+    }
+  };
+  return (
+    <section class={`card ${styles.group}`} aria-label="Goal">
+      <h2>
+        <Icon name="flag" size={18} />
+        Goal
+      </h2>
+      {editing ? (
+        <textarea class={styles.goal} rows={5} value={text} onInput={(e) => setText(e.currentTarget.value)} />
+      ) : (
+        <p class={styles.goalText}>{goal}</p>
+      )}
+      <div class={styles.goalActions}>
+        {error && <p class="error">{error}</p>}
+        {editing ? (
+          <>
+            <button type="button" class={styles.action} onClick={() => setText(null)}>
+              Discard
+            </button>
+            <button type="button" class="button" disabled={!text?.trim() || text === goal} onClick={() => void save()}>
+              Set the goal
+            </button>
+          </>
+        ) : (
+          <button type="button" class={styles.action} onClick={() => setText(goal)}>
+            <Icon name="edit" size={16} />
+            Change
+          </button>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function Row(props: {
-  f: SupervisorField;
+  f: SettingField;
   value: number | boolean;
   fallback: number | boolean;
   changed: boolean;
@@ -171,11 +211,7 @@ function Row(props: {
   );
 }
 
-function show(v: number | boolean, f: SupervisorField): string {
+function show(v: number | boolean, f: SettingField): string {
   if (typeof v === 'boolean') return v ? 'on' : 'off';
   return f.unit ? `${v} ${f.unit}` : String(v);
-}
-
-function count(n: number, what: string): string {
-  return `${n} ${what}${n === 1 ? '' : 's'}`;
 }

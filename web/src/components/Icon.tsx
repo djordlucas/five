@@ -35,6 +35,9 @@ const paths: Record<IconName, string> = {
   library: 'M5 4h4v16H5zM10 4h4v16h-4zM15.5 5.5l3.8-1 3.2 14.5-3.8 1z',
   send: 'M4 12l16-8-6 16-3-7zM11 13l9-9',
   leave: 'M14 4h6v16h-6M10 8l-4 4 4 4M6 12h10',
+  board: 'M4 4h16v16H4zM9.5 4v16M14.5 4v16M5.5 8h2.5M11 8h2.5M16 8h2.5M5.5 11h2.5M11 11h2.5',
+  worker: 'M9 8a3 3 0 1 0 6 0 3 3 0 0 0-6 0zM5 20a7 7 0 0 1 14 0M12 14v3',
+  lead: 'M12 3l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.4 6.8 19.1l1-5.8L3.5 9.2l5.9-.9z',
 };
 
 export function Icon({ name, size = 22 }: { name: IconName; size?: number }) {

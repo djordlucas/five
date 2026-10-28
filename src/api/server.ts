@@ -16,30 +16,34 @@ import type { Five } from "../app.ts";
 import type { Config } from "../config.ts";
 import type { Logger } from "../log.ts";
 import { type LibraryStore, type LibraryUse, usersOf } from "../tools/libs.ts";
+import { CHAT_SYSTEM } from "../workers/chat.ts";
+import { LEAD_SYSTEM } from "../workers/lead.ts";
 import type {
-  ContextView,
+  BoardPage,
   ErrorBody,
   EventsPage,
   InboxMessage,
   InboxPage,
   LibraryDetail,
   LibraryInfo,
-  LoopStatus,
+  SettingsView,
   Status,
-  SupervisorView,
+  Task,
   ToolDetail,
   ToolInfo,
+  WorkerDetail,
+  WorkerInfo,
 } from "./types.ts";
 import { MAX_FILE_BYTES, Workspace, WorkspaceError } from "./workspace.ts";
 
-/** The longest message the person can send: it goes into a turn's prompt. */
+/** The longest message the person can send: it goes into a prompt. */
 const MAX_MESSAGE_CHARS = 4000;
 
 const MAX_BODY = 1024 * 1024;
 /** Events in one page. */
 const PAGE = 500;
-/** Turns whose events a first request gets. */
-const TURNS = 20;
+/** Runs whose events a first request gets. */
+const RUNS = 30;
 
 export interface ApiOptions {
   five: Five;
@@ -79,9 +83,9 @@ class Raw {
 }
 
 export function createApi(opts: ApiOptions): http.Server {
-  const { five, cfg } = opts;
-  const { loop, state, store } = five;
-  const libsOf = (used: LibraryUse[]) => libsOfWith(five.libs, used);
+  const { five: app, cfg } = opts;
+  const { five, state, store } = app;
+  const libsOf = (used: LibraryUse[]) => libsOfWith(app.libs, used);
   const log = opts.log.child({ component: "api" });
   const routes: { method: string; pattern: RegExp; keys: string[]; handler: Handler; bytes?: boolean }[] = [];
   const route = (method: string, p: string, handler: Handler, opts: { bytes?: boolean } = {}) => {
@@ -94,143 +98,184 @@ export function createApi(opts: ApiOptions): http.Server {
     );
     routes.push({ method, pattern, keys, handler, ...opts });
   };
-  /** Runs a change the loop may refuse during a turn; a refusal is a 409. */
-  const guarded = (fn: () => void) => {
+  /** Runs a change five may refuse; a refusal is a 409. */
+  const guarded = <T>(fn: () => T): T => {
     try {
-      fn();
+      return fn();
     } catch (err) {
       throw new HttpError(409, err instanceof Error ? err.message : String(err));
     }
-    return contextView();
   };
   const text = (body: Record<string, unknown>, key: string): string => {
     const v = body[key];
     if (typeof v !== "string" || !v.trim()) throw new HttpError(400, `${key} must be a non-empty string`);
     return v;
   };
-  const index = (params: Record<string, string>): number => {
-    const i = Number(params.i);
-    if (!Number.isInteger(i) || !loop.ctx.messages[i]) throw new HttpError(404, `no message at index ${params.i}`);
-    return i;
+  const message = (body: Record<string, unknown>): string => {
+    const t = text(body, "text").trim();
+    if (t.length > MAX_MESSAGE_CHARS) throw new HttpError(400, `a message is at most ${MAX_MESSAGE_CHARS} characters`);
+    return t;
   };
-  const contextView = (): ContextView => {
-    const { system, next, turn, messages } = loop.ctx;
-    return { system, self: loop.selfBlock(), next, turn, messages };
-  };
-
-  route(
-    "GET",
-    "/api/v1/status",
-    (): Status => ({
+  const status = (): Status => {
+    const s = five.status();
+    return {
       model: cfg.model,
       endpoint: cfg.endpoint,
       contextTokens: cfg.contextTokens,
       think: cfg.think,
-      maxSteps: cfg.maxSteps,
       workspace: cfg.workspace,
-      loop: loop.status(),
-      messages: loop.ctx.messages.length,
+      running: s.running,
+      active: s.active,
+      slots: five.settings.current.slots,
+      queued: s.queued,
+      board: five.board.counts(),
+      ...(s.chat && { chat: s.chat }),
+      goal: five.d.goal(),
       tools: store.list().length,
-      libraries: five.libs.list().length,
+      libraries: app.libs.list().length,
+      workers: five.workers.list().length,
       lastSeq: state.lastSeq(),
       inboxLast: state.lastFromFive(),
-    }),
-  );
+    };
+  };
 
-  // ── the loop ────────────────────────────────────────────────────────────
+  route("GET", "/api/v1/status", status);
+
+  // ── the main loop ───────────────────────────────────────────────────────
   const control = (fn: () => void) => () => {
     fn();
-    return loop.status();
+    return status();
   };
   route(
     "POST",
     "/api/v1/loop/start",
-    control(() => loop.start()),
+    control(() => five.start()),
   );
   route(
     "POST",
     "/api/v1/loop/pause",
-    control(() => loop.pause()),
+    control(() => five.pause()),
   );
   route(
     "POST",
     "/api/v1/loop/stop",
-    control(() => loop.stop()),
+    control(() => five.stop()),
   );
-  route("POST", "/api/v1/loop/step", () => {
-    guarded(() => loop.stepOnce());
-    return loop.status();
+  route("POST", "/api/v1/reset", ({ body }) => {
+    guarded(() => app.reset({ clean: body.clean === true }));
+    return status();
+  });
+  route("GET", "/api/v1/goal", () => ({ goal: five.d.goal() }));
+  route("PUT", "/api/v1/goal", ({ body }) => {
+    five.d.setGoal(text(body, "goal").trim(), "person");
+    return { goal: five.d.goal() };
   });
 
-  // ── the context ─────────────────────────────────────────────────────────
-  route("GET", "/api/v1/context", contextView);
-  route("PUT", "/api/v1/context/system", ({ body }) => {
-    const t = text(body, "text");
-    return guarded(() => loop.edit("system prompt replaced", (c) => (c.system = t)));
+  // ── the board ───────────────────────────────────────────────────────────
+  route("GET", "/api/v1/board", ({ query }): BoardPage => {
+    const s = query.get("status");
+    const statuses = ["open", "running", "done", "failed", "cancelled"];
+    if (s && !statuses.includes(s)) throw new HttpError(400, `status is one of ${statuses.join(", ")}`);
+    return {
+      tasks: five.board.list(positive(query.get("limit"), 200), (s || undefined) as Task["status"] | undefined),
+      counts: five.board.counts(),
+    };
   });
-  route("PUT", "/api/v1/context/next", ({ body }) => {
-    const t = text(body, "text");
-    return guarded(() => loop.edit("next prompt set", (c) => (c.next = t)));
+  route("GET", "/api/v1/board/:id", ({ params }): Task => {
+    const t = five.board.get(Number(params.id));
+    if (!t) throw new HttpError(404, `no task #${params.id}`);
+    return t;
   });
-  route("PUT", "/api/v1/context/messages/:i", ({ params, body }) => {
-    const i = index(params);
-    if (typeof body.content !== "string") throw new HttpError(400, "content must be a string");
-    const content = body.content;
-    return guarded(() =>
-      loop.edit(`message ${i} edited`, (c) => {
-        (c.messages[i] as { content: string | null }).content = content;
-      }),
-    );
+  route("POST", "/api/v1/board", ({ body }): Task => {
+    const input = body.input === undefined ? "" : body.input;
+    if (typeof input !== "string") throw new HttpError(400, "input must be a string");
+    const worker = text(body, "worker");
+    if (!five.workers.get(worker)) throw new HttpError(400, `no task worker named "${worker}"`);
+    return five.post({ worker, title: text(body, "title").trim(), input });
   });
-  route("DELETE", "/api/v1/context/messages/:i", ({ params }) => {
-    const i = index(params);
-    return guarded(() => loop.edit(`message ${i} deleted`, (c) => c.messages.splice(i, 1)));
+  route("DELETE", "/api/v1/board/:id", ({ params }) => {
+    guarded(() => five.cancel(Number(params.id)));
+    return five.board.get(Number(params.id));
   });
-  route("POST", "/api/v1/context/reset", ({ body }) =>
-    guarded(() =>
-      loop.reset({
-        ...(typeof body.system === "string" && { system: body.system }),
-        ...(typeof body.next === "string" && { next: body.next }),
-        clean: body.clean === true,
-      }),
+
+  // ── workers ─────────────────────────────────────────────────────────────
+  const fixedWorker = (name: "lead" | "chat", description: string, source: string): WorkerDetail => ({
+    name,
+    kind: name,
+    description,
+    fixed: true,
+    done: 0,
+    failed: 0,
+    source,
+  });
+  const fixed = () => [
+    fixedWorker(
+      "lead",
+      "Plans: reads the board's results, posts tasks, writes and revises task workers, keeps its notes. Five's own; runs when the board runs low, on a timer, and after a chat.",
+      LEAD_SYSTEM,
     ),
-  );
+    fixedWorker(
+      "chat",
+      "Talks with the person, live: answers from the files, the board and the web, and changes course when asked. Five's own.",
+      CHAT_SYSTEM,
+    ),
+  ];
+  const workerInfo = (name: string): WorkerDetail | undefined => {
+    const fix = fixed().find((w) => w.name === name);
+    if (fix) return fix;
+    const w = five.workers.get(name);
+    if (!w) return undefined;
+    const { meta } = w;
+    return {
+      name: meta.name,
+      kind: "task",
+      description: meta.description,
+      fixed: false,
+      revision: meta.revision,
+      updatedAt: meta.updatedAt,
+      ...(meta.libs && { libs: libsOf(meta.libs) }),
+      ...five.board.tally(meta.name),
+      source: w.source,
+    };
+  };
+  route("GET", "/api/v1/workers", () => ({
+    workers: [...fixed(), ...five.workers.list().flatMap((w) => workerInfo(w.name) ?? [])].map(
+      ({ source, ...info }): WorkerInfo => info,
+    ),
+  }));
+  route("GET", "/api/v1/workers/:name", ({ params }): WorkerDetail => {
+    const w = workerInfo(params.name ?? "");
+    if (!w) throw new HttpError(404, `no worker "${params.name}"`);
+    return w;
+  });
 
-  // ── the supervisor ──────────────────────────────────────────────────────
-  route("GET", "/api/v1/supervisor", (): SupervisorView => loop.supervisor.view());
-  route("PUT", "/api/v1/supervisor", ({ body }): SupervisorView => {
+  // ── settings ────────────────────────────────────────────────────────────
+  route("GET", "/api/v1/settings", (): SettingsView => five.settings.view());
+  route("PUT", "/api/v1/settings", ({ body }): SettingsView => {
     try {
-      loop.supervisor.update(body);
+      five.settings.update(body);
     } catch (err) {
       throw new HttpError(400, err instanceof Error ? err.message : String(err));
     }
-    return loop.supervisor.view();
+    return five.settings.view();
   });
-  route("DELETE", "/api/v1/supervisor", (): SupervisorView => {
-    loop.supervisor.resetSettings();
-    return loop.supervisor.view();
+  route("DELETE", "/api/v1/settings", (): SettingsView => {
+    five.settings.reset();
+    return five.settings.view();
   });
 
   // ── the inbox ───────────────────────────────────────────────────────────
   route("GET", "/api/v1/inbox", (): InboxPage => ({ messages: state.listInbox() }));
-  route("POST", "/api/v1/inbox", ({ body }): InboxMessage => {
-    const t = text(body, "text").trim();
-    if (t.length > MAX_MESSAGE_CHARS) throw new HttpError(400, `a message is at most ${MAX_MESSAGE_CHARS} characters`);
-    const asPrompt = (body as { asPrompt?: unknown } | undefined)?.asPrompt;
-    if (asPrompt !== undefined && typeof asPrompt !== "boolean") throw new HttpError(400, "asPrompt must be a boolean");
-    return loop.receive(t, asPrompt === true);
-  });
+  route("POST", "/api/v1/inbox", ({ body }): InboxMessage => five.receive(message(body)));
 
   // ── the chat ────────────────────────────────────────────────────────────
-  route("POST", "/api/v1/chat", ({ body }): LoopStatus => {
-    const t = text(body, "text").trim();
-    if (t.length > MAX_MESSAGE_CHARS) throw new HttpError(400, `a message is at most ${MAX_MESSAGE_CHARS} characters`);
-    loop.chat(t);
-    return loop.status();
+  route("POST", "/api/v1/chat", ({ body }): Status => {
+    five.say(message(body));
+    return status();
   });
-  route("POST", "/api/v1/chat/leave", (): LoopStatus => {
-    guarded(() => loop.leaveChat());
-    return loop.status();
+  route("POST", "/api/v1/chat/leave", (): Status => {
+    guarded(() => five.leaveChat());
+    return status();
   });
 
   // ── events ──────────────────────────────────────────────────────────────
@@ -238,12 +283,12 @@ export function createApi(opts: ApiOptions): http.Server {
     const after = query.get("after");
     const events =
       after === null
-        ? state.recentEvents(positive(query.get("turns"), TURNS))
+        ? state.recentEvents(positive(query.get("runs"), RUNS))
         : state.eventsAfter(Number(after) || 0, PAGE);
     return { events, last: state.lastSeq() };
   });
-  route("GET", "/api/v1/turns/:n", ({ params }): EventsPage => {
-    return { events: state.turnEvents(Number(params.n) || 0), last: state.lastSeq() };
+  route("GET", "/api/v1/runs/:n", ({ params }): EventsPage => {
+    return { events: state.runEvents(Number(params.n) || 0), last: state.lastSeq() };
   });
 
   // ── tools ───────────────────────────────────────────────────────────────
@@ -277,7 +322,7 @@ export function createApi(opts: ApiOptions): http.Server {
 
   // ── libraries ───────────────────────────────────────────────────────────
   const libraryInfo = (name: string): LibraryInfo | undefined => {
-    const lib = five.libs.get(name);
+    const lib = app.libs.get(name);
     if (!lib) return undefined;
     const { meta } = lib;
     return {
@@ -285,36 +330,45 @@ export function createApi(opts: ApiOptions): http.Server {
       description: meta.description,
       revision: meta.revision,
       updatedAt: meta.updatedAt,
-      usedBy: usersOf(meta.name, store, five.libs).tools.map((t) => ({ tool: t.name, revision: t.revision })),
+      usedBy: [
+        ...usersOf(meta.name, store, app.libs).tools.map((t) => ({ tool: t.name, revision: t.revision })),
+        ...five.workers
+          .list()
+          .flatMap((w) =>
+            (w.libs ?? [])
+              .filter((l) => l.name === meta.name)
+              .map((l) => ({ tool: `worker ${w.name}`, revision: l.revision })),
+          ),
+      ],
     };
   };
   route("GET", "/api/v1/libraries", () => ({
-    libraries: five.libs.list().flatMap((l) => libraryInfo(l.name) ?? []),
+    libraries: app.libs.list().flatMap((l) => libraryInfo(l.name) ?? []),
   }));
   route("GET", "/api/v1/libraries/:name", ({ params }): LibraryDetail => {
     const name = params.name ?? "";
     const info = libraryInfo(name);
-    const lib = five.libs.get(name);
+    const lib = app.libs.get(name);
     if (!info || !lib) throw new HttpError(404, `no library "${name}"`);
-    return { ...info, source: lib.source, deps: lib.meta.deps, importedBy: usersOf(name, store, five.libs).libs };
+    return { ...info, source: lib.source, deps: lib.meta.deps, importedBy: usersOf(name, store, app.libs).libs };
   });
 
   // ── child processes ─────────────────────────────────────────────────────
-  route("GET", "/api/v1/processes", () => ({ processes: five.processes.list() }));
+  route("GET", "/api/v1/processes", () => ({ processes: app.processes.list() }));
   route("GET", "/api/v1/processes/:id", ({ params }) => {
-    const p = five.processes.get(params.id ?? "");
+    const p = app.processes.get(params.id ?? "");
     if (!p) throw new HttpError(404, `no process ${params.id}`);
     return p;
   });
   route("POST", "/api/v1/processes/:id/kill", ({ params }) => {
     const id = params.id ?? "";
-    if (!five.processes.kill(id)) {
+    if (!app.processes.kill(id)) {
       throw new HttpError(
-        five.processes.get(id) ? 409 : 404,
-        five.processes.get(id) ? `${id} has ended` : `no process ${id}`,
+        app.processes.get(id) ? 409 : 404,
+        app.processes.get(id) ? `${id} has ended` : `no process ${id}`,
       );
     }
-    return five.processes.get(id);
+    return app.processes.get(id);
   });
 
   // ── the workspace ───────────────────────────────────────────────────────

@@ -68,13 +68,13 @@ function Unread({ s }: { s: Section }) {
   return <span class={styles.unread} role="status" aria-label="New message" />;
 }
 
-/** What the loop is doing, on every page. */
+/** What five is doing, on every page: how many runs, or paused. */
 function LoopState() {
   const s = status.value;
   if (!s) return null;
-  const { loop } = s;
-  const state = loop.busy || loop.running ? 'running' : 'paused';
-  const label = loop.busy ? `turn ${loop.turn} · step ${loop.step}` : loop.running ? 'between turns' : 'paused';
+  const n = s.active.length;
+  const state = s.running || n > 0 ? 'running' : 'paused';
+  const label = `${s.running ? 'running' : 'paused'}${n ? ` · ${n} ${n === 1 ? 'run' : 'runs'}` : ''}`;
   return <Badge state={state}>{label}</Badge>;
 }
 

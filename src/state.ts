@@ -1,27 +1,16 @@
 // Five's own state, in one SQLite file: <workspace>/.five/five.db.
 //
-// The context (system prompt, messages, next prompt), the event log the web UI
-// follows, the inbox between five and the person, generated tools and their run history, and background runs all
-// live here, so a restart resumes where the last process stopped. The tool and
-// run tables are seven's.
+// The event log the web UI follows, the board of tasks, the task workers, the
+// inbox between five and the person, generated tools and libraries with their
+// run history, and background runs all live here, so a restart resumes where
+// the last process stopped. The tool and run tables are seven's.
 
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import type { Event, EventBody, InboxMessage } from "./api/types.ts";
-import type { Message } from "./llm/model.ts";
 
-export type { Event, EventBody, TurnEnd } from "./api/types.ts";
-
-/** Everything the model sees, and the prompt that starts its next turn. */
-export interface Context {
-  system: string;
-  messages: Message[];
-  /** The user message that starts the next turn. */
-  next: string;
-  /** Turns started so far. */
-  turn: number;
-}
+export type { Event, EventBody, RunEnd } from "./api/types.ts";
 
 export interface RunRow {
   id: string;
@@ -39,6 +28,7 @@ export interface RunRow {
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+-- turn: the run an event belongs to (the column predates workers).
 CREATE TABLE IF NOT EXISTS events (
   seq INTEGER PRIMARY KEY,
   at TEXT NOT NULL,
@@ -46,6 +36,33 @@ CREATE TABLE IF NOT EXISTS events (
   body TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS events_turn ON events (turn, seq);
+CREATE TABLE IF NOT EXISTS tasks (
+  id INTEGER PRIMARY KEY,
+  worker TEXT NOT NULL,
+  title TEXT NOT NULL,
+  input TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('open', 'running', 'done', 'failed', 'cancelled')),
+  result TEXT,
+  error TEXT,
+  posted_by TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  started_at TEXT,
+  ended_at TEXT,
+  run INTEGER
+);
+CREATE INDEX IF NOT EXISTS tasks_status ON tasks (status, id);
+CREATE TABLE IF NOT EXISTS workers (
+  name TEXT PRIMARY KEY,
+  description TEXT NOT NULL,
+  deps TEXT NOT NULL,
+  timeout_ms INTEGER,
+  revision INTEGER NOT NULL,
+  source TEXT NOT NULL,
+  bundle TEXT,
+  libs TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS tools (
   name TEXT PRIMARY KEY,
   description TEXT NOT NULL,
@@ -138,21 +155,7 @@ export class State {
     return this.db.isOpen;
   }
 
-  // ── context ───────────────────────────────────────────────────────────────
-
-  /** The saved context, or none before the first save. */
-  loadContext(): Context | undefined {
-    const row = this.db.prepare("SELECT value FROM meta WHERE key = 'context'").get() as { value: string } | undefined;
-    return row ? (JSON.parse(row.value) as Context) : undefined;
-  }
-
-  saveContext(ctx: Context): void {
-    this.db
-      .prepare(
-        "INSERT INTO meta (key, value) VALUES ('context', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
-      )
-      .run(JSON.stringify(ctx));
-  }
+  // ── meta ──────────────────────────────────────────────────────────────────
 
   /** A small saved setting, or undefined when never set. */
   getMeta(key: string): string | undefined {
@@ -168,12 +171,20 @@ export class State {
 
   // ── events ────────────────────────────────────────────────────────────────
 
-  addEvent(turn: number, body: EventBody): Event {
+  /** An event of a run, or of none (0). */
+  addEvent(run: number, body: EventBody): Event {
     const at = now();
     const r = this.db
       .prepare("INSERT INTO events (at, turn, body) VALUES (?, ?, ?)")
-      .run(at, turn, JSON.stringify(body));
-    return { ...body, seq: Number(r.lastInsertRowid), at, turn };
+      .run(at, run, JSON.stringify(body));
+    return { ...body, seq: Number(r.lastInsertRowid), at, run };
+  }
+
+  /** The next run's number: runs are numbered from 1, across restarts. */
+  nextRun(): number {
+    const n = (Number(this.getMeta("runs")) || 0) + 1;
+    this.setMeta("runs", String(n));
+    return n;
   }
 
   /** Events after `seq`, oldest first, at most `limit`. */
@@ -181,17 +192,26 @@ export class State {
     return this.db.prepare("SELECT * FROM events WHERE seq > ? ORDER BY seq LIMIT ?").all(seq, limit).map(toEvent);
   }
 
-  /** Every event of the last `turns` turns, oldest first. */
-  recentEvents(turns: number): Event[] {
+  /**
+   * The events of the last `runs` runs, oldest first, with the events of no
+   * run since the first of them began.
+   */
+  recentEvents(runs: number): Event[] {
     return this.db
-      .prepare("SELECT * FROM events WHERE turn > (SELECT COALESCE(MAX(turn), 0) FROM events) - ? ORDER BY seq")
-      .all(turns)
+      .prepare(
+        `WITH recent AS (SELECT COALESCE(MAX(turn), 0) - ? AS after FROM events),
+              since AS (SELECT COALESCE(MIN(seq), 0) AS seq FROM events, recent WHERE turn > recent.after)
+         SELECT * FROM events, recent, since
+         WHERE turn > recent.after OR (turn = 0 AND events.seq >= since.seq)
+         ORDER BY events.seq`,
+      )
+      .all(runs)
       .map(toEvent);
   }
 
-  /** The events of one turn, oldest first. */
-  turnEvents(turn: number): Event[] {
-    return this.db.prepare("SELECT * FROM events WHERE turn = ? ORDER BY seq").all(turn).map(toEvent);
+  /** The events of one run, oldest first. */
+  runEvents(run: number): Event[] {
+    return this.db.prepare("SELECT * FROM events WHERE turn = ? ORDER BY seq").all(run).map(toEvent);
   }
 
   lastSeq(): number {
@@ -205,24 +225,19 @@ export class State {
 
   // ── inbox ─────────────────────────────────────────────────────────────────
 
-  addInbox(
-    turn: number,
-    from: InboxMessage["from"],
-    text: string,
-    opts: { subject?: string; asPrompt?: boolean } = {},
-  ): InboxMessage {
+  /** run: the run five sent it from; 0 for the person's. */
+  addInbox(run: number, from: InboxMessage["from"], text: string, opts: { subject?: string } = {}): InboxMessage {
     const at = now();
     const r = this.db
-      .prepare("INSERT INTO inbox (at, turn, sender, text, subject, as_prompt) VALUES (?, ?, ?, ?, ?, ?)")
-      .run(at, turn, from, text, opts.subject ?? null, opts.asPrompt ? 1 : 0);
+      .prepare("INSERT INTO inbox (at, turn, sender, text, subject) VALUES (?, ?, ?, ?, ?)")
+      .run(at, run, from, text, opts.subject ?? null);
     return {
       id: Number(r.lastInsertRowid),
       at,
-      turn,
+      turn: run,
       from,
       text,
       ...(opts.subject !== undefined && { subject: opts.subject }),
-      ...(opts.asPrompt && { asPrompt: true }),
     };
   }
 
@@ -231,7 +246,7 @@ export class State {
     return this.db.prepare("SELECT * FROM inbox ORDER BY id DESC LIMIT ?").all(limit).map(toInbox);
   }
 
-  /** The person's messages not yet put before a turn, oldest first. */
+  /** The person's messages the lead has not read yet, oldest first. */
   undelivered(): InboxMessage[] {
     return this.db
       .prepare("SELECT * FROM inbox WHERE sender = 'person' AND delivered_turn IS NULL ORDER BY id")
@@ -239,26 +254,18 @@ export class State {
       .map(toInbox);
   }
 
-  markDelivered(ids: number[], turn: number): void {
+  /** Mark messages read by a run. */
+  markDelivered(ids: number[], run: number): void {
     const stmt = this.db.prepare("UPDATE inbox SET delivered_turn = ? WHERE id = ?");
-    for (const id of ids) stmt.run(turn, id);
+    for (const id of ids) stmt.run(run, id);
   }
 
-  /** How many messages five sent and on which turn the last, and how many the person sent. */
-  inboxCounts(): { sent: number; lastSentTurn: number | null; received: number; unread: number } {
-    const row = this.db
-      .prepare(
-        "SELECT COUNT(*) FILTER (WHERE sender = 'five') AS sent, MAX(turn) FILTER (WHERE sender = 'five') AS last, " +
-          "COUNT(*) FILTER (WHERE sender = 'person') AS received, " +
-          "COUNT(*) FILTER (WHERE sender = 'person' AND delivered_turn IS NULL) AS unread FROM inbox",
-      )
-      .get() as { sent: number; last: number | null; received: number; unread: number };
-    return {
-      sent: Number(row.sent),
-      lastSentTurn: row.last === null ? null : Number(row.last),
-      received: Number(row.received),
-      unread: Number(row.unread),
+  /** When five last sent the person a message; undefined when never. */
+  lastSentAt(): string | undefined {
+    const row = this.db.prepare("SELECT MAX(at) AS at FROM inbox WHERE sender = 'five'").get() as {
+      at: string | null;
     };
+    return row.at ?? undefined;
   }
 
   /** The id of five's latest message; 0 when none. */
@@ -332,7 +339,7 @@ type Row = Record<string, SQLInputValue>;
 
 function toEvent(r: unknown): Event {
   const x = r as Row;
-  return { ...(JSON.parse(String(x.body)) as EventBody), seq: Number(x.seq), at: String(x.at), turn: Number(x.turn) };
+  return { ...(JSON.parse(String(x.body)) as EventBody), seq: Number(x.seq), at: String(x.at), run: Number(x.turn) };
 }
 
 function toInbox(r: unknown): InboxMessage {
@@ -344,7 +351,6 @@ function toInbox(r: unknown): InboxMessage {
     from: x.sender as InboxMessage["from"],
     text: String(x.text),
     ...(x.subject !== null && x.subject !== undefined && { subject: String(x.subject) }),
-    ...(Number(x.as_prompt) === 1 && { asPrompt: true }),
     ...(x.delivered_turn !== null && { deliveredTurn: Number(x.delivered_turn) }),
   };
 }

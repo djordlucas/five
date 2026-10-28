@@ -3,24 +3,25 @@ import { LocationProvider, Route, Router } from 'preact-iso';
 import { Shell } from './components/Shell';
 import { startPolling, stopPolling } from './live';
 import { Config } from './pages/Config';
-import { Context } from './pages/Context';
+import { Board } from './pages/Board';
 import { Inbox } from './pages/Inbox';
 import { Libraries } from './pages/Libraries';
 import { Activity } from './pages/Activity';
 import { Monitor } from './pages/Monitor';
 import { NotFound } from './pages/NotFound';
 import { Tools } from './pages/Tools';
+import { Workers } from './pages/Workers';
 import { InWorkspace, Workspace } from './pages/Workspace';
 
-// Workspace's tabs: its files, the agent's context, the tools it built and the libraries they share.
+// Workspace's tabs: its files, the workers, the tools the agents built and the libraries they share.
 const WorkspaceFiles = () => (
   <InWorkspace>
     <Workspace />
   </InWorkspace>
 );
-const WorkspaceContext = () => (
+const WorkspaceWorkers = ({ name }: { name?: string }) => (
   <InWorkspace>
-    <Context />
+    <Workers name={name} />
   </InWorkspace>
 );
 const WorkspaceTools = ({ name }: { name?: string }) => (
@@ -45,9 +46,11 @@ export function App() {
       <Shell>
         <Router>
           <Route path="/" component={Activity} />
+          <Route path="/board" component={Board} />
           <Route path="/inbox" component={Inbox} />
           <Route path="/workspace" component={WorkspaceFiles} />
-          <Route path="/workspace/context" component={WorkspaceContext} />
+          <Route path="/workspace/workers/:name" component={WorkspaceWorkers} />
+          <Route path="/workspace/workers" component={WorkspaceWorkers} />
           <Route path="/workspace/tools/:name" component={WorkspaceTools} />
           <Route path="/workspace/tools" component={WorkspaceTools} />
           <Route path="/workspace/libraries/:name" component={WorkspaceLibraries} />

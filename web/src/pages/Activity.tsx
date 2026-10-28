@@ -1,91 +1,111 @@
 import { signal } from '@preact/signals';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { type ChatStatus, type Event, type LiveWork, message, post } from '../api/client';
+import {
+  type ActiveRun,
+  type ChatStatus,
+  type Event,
+  type LiveWork,
+  message,
+  post,
+  type WorkerKind,
+} from '../api/client';
 import { Code } from '../code';
-import { fileHref, rawUrl } from '../workspace';
 import { Icon } from '../components/Icon';
-import type { IconName } from '../sections';
-import { Badge, Gauge } from '../components/ui';
+import { Badge } from '../components/ui';
 import { clock, duration, oneLine, prettyArgs } from '../format';
-import { events, loadMoreTurns, refresh, status, turnsLoaded } from '../live';
+import { events, loadMoreRuns, refresh, runsLoaded, status } from '../live';
 import { Markdown } from '../markdown';
+import type { IconName } from '../sections';
+import { fileHref, rawUrl } from '../workspace';
 import styles from './Activity.module.css';
 
-/** The choices of how many turns the page shows, the last first. */
-const SHOW = [1, 2, 3, 5, 10, 20, 50];
-const shown = signal(readShown());
+/** The choices of how many runs the page shows, the last first. */
+const SHOW = [5, 10, 20, 50, 100];
+const shown = signal<number>(read<number>('five.showRuns', (n) => SHOW.includes(Number(n)), 20));
+/** Which runs the page shows: every kind, or one. */
+type Filter = 'all' | WorkerKind;
+const filter = signal<Filter>(read('five.runFilter', (v) => ['all', 'lead', 'chat', 'task'].includes(v), 'all'));
+/** Finished runs opened by hand; a running run is always open. */
+const opened = signal<Set<number>>(new Set());
 
-function readShown(): number {
+function read<T extends string | number>(key: string, ok: (v: string) => boolean, fallback: T): T {
   try {
-    const n = Number(localStorage.getItem('five.showTurns'));
-    return SHOW.includes(n) ? n : 3;
+    const v = localStorage.getItem(key);
+    if (v !== null && ok(v)) return (typeof fallback === 'number' ? Number(v) : v) as T;
   } catch {
-    return 3;
+    // The default, then.
+  }
+  return fallback;
+}
+
+function keep(key: string, value: string | number): void {
+  try {
+    localStorage.setItem(key, String(value));
+  } catch {
+    // Not kept: the default comes back on the next load.
   }
 }
 
 function setShown(n: number): void {
   shown.value = n;
-  try {
-    localStorage.setItem('five.showTurns', String(n));
-  } catch {
-    // Not kept: the default comes back on the next load.
-  }
-  // The timeline loads 20 turns back at first: load more when asked for more.
-  if (n > turnsLoaded.value) void loadMoreTurns(n - turnsLoaded.value);
+  keep('five.showRuns', n);
+  // The timeline loads 30 runs back at first: load more when asked for more.
+  if (n > runsLoaded.value) void loadMoreRuns(n - runsLoaded.value);
 }
 
 type Of<T extends Event['type']> = Extract<Event, { type: T }>;
 
-interface Turn {
-  turn: number;
-  started?: Of<'turn_started'>;
-  /** Everything after the prompt, in the order it happened, the turn's end among it. */
-  items: (
-    | Of<'model'>
-    | Of<'chat'>
-    | Of<'chat_ended'>
-    | Of<'context'>
-    | Of<'loop'>
-    | Of<'inbox'>
-    | Of<'supervisor'>
-    | Of<'turn_ended'>
-  )[];
+interface RunGroup {
+  n: number;
+  started?: Of<'run_started'>;
+  ended?: Of<'run_ended'>;
+  /** Everything between, in order. */
+  items: Event[];
   /** Tool results by call id. */
   results: Map<string, Of<'tool'>>;
+  /** Its first event, to place it in the timeline. */
+  first: number;
 }
 
-/** The events, grouped by turn, oldest first. */
-function group(list: Event[]): Turn[] {
-  const turns: Turn[] = [];
-  let cur: Turn | undefined;
+type Item = { kind: 'run'; run: RunGroup } | { kind: 'event'; e: Event };
+
+/** The events as the timeline shows them: each run as one group where it began, and the events of no run between. */
+function timeline(list: Event[]): Item[] {
+  const runs = new Map<number, RunGroup>();
+  const items: Item[] = [];
   for (const e of list) {
-    if (!cur || cur.turn !== e.turn) {
-      cur = { turn: e.turn, items: [], results: new Map() };
-      turns.push(cur);
+    if (e.run === 0) {
+      items.push({ kind: 'event', e });
+      continue;
     }
-    if (e.type === 'turn_started') cur.started = e;
-    else if (e.type === 'tool') cur.results.set(e.id, e);
-    else cur.items.push(e);
+    let g = runs.get(e.run);
+    if (!g) {
+      g = { n: e.run, items: [], results: new Map(), first: e.seq };
+      runs.set(e.run, g);
+      items.push({ kind: 'run', run: g });
+    }
+    if (e.type === 'run_started') g.started = e;
+    else if (e.type === 'run_ended') g.ended = e;
+    else if (e.type === 'tool') g.results.set(e.id, e);
+    else g.items.push(e);
   }
-  return turns;
+  return items;
 }
 
-/**
- * The loop as it runs: its controls, then every turn, newest at the bottom,
- * followed as it grows — and the chat with five, below it.
- */
+/** Five at work: its controls, then every run, newest at the bottom, followed as it grows — and the chat below. */
 export function Activity() {
-  const turns = useMemo(() => group(events.value), [events.value]);
+  const items = useMemo(() => timeline(events.value), [events.value]);
   const bottom = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
+  const s = status.value;
+  const active = new Map((s?.active ?? []).map((a) => [a.run, a]));
+  const chat = s?.chat;
+  const live = s?.active.map((a) => `${a.run}:${a.live?.phase}:${a.live?.content?.length ?? 0}:${a.live?.thinking?.length ?? 0}`).join();
 
-  const live = status.value?.loop.busy ? status.value.loop.live : undefined;
-  const chat = status.value?.loop.chat;
-  // Follow the bottom as events arrive, as the model's reply streams in, and as the person writes.
+  // Follow the bottom as events arrive, as replies stream in, and as the person writes.
   useLayoutEffect(() => {
     if (stick.current) bottom.current?.scrollIntoView({ block: 'end' });
-  }, [events.value.length, live?.phase, live?.thinking?.length, live?.content?.length, chat?.queued.length]);
+  }, [events.value.length, live, chat?.queued.length]);
   useEffect(() => {
     const onScroll = () => {
       const b = bottom.current?.getBoundingClientRect();
@@ -95,28 +115,45 @@ export function Activity() {
     return () => window.removeEventListener('scroll', onScroll, true);
   }, []);
 
-  const visible = turns.slice(-shown.value);
-  const hidden = (visible[0]?.turn ?? 0) - 1;
+  const f = filter.value;
+  const runs = items.filter((i): i is Extract<Item, { kind: 'run' }> => i.kind === 'run');
+  const keepRuns = new Set(
+    runs
+      .filter((i) => f === 'all' || i.run.started?.kind === f)
+      .slice(-shown.value)
+      .map((i) => i.run.n),
+  );
+  const firstShown = runs.find((i) => keepRuns.has(i.run.n))?.run.first ?? Number.POSITIVE_INFINITY;
+  const visible = items.filter((i) =>
+    i.kind === 'run' ? keepRuns.has(i.run.n) : f === 'all' && i.e.seq >= Math.min(firstShown, Number.MAX_SAFE_INTEGER),
+  );
+  const hidden = runs.filter((i) => f === 'all' || i.run.started?.kind === f).length - keepRuns.size;
   const more = SHOW.find((n) => n > shown.value);
+  // The chat's run, when it has not shown an event yet.
+  const chatShown = chat && runs.some((i) => i.run.n === chat.run);
+
   return (
     <div class={styles.page}>
       <Controls />
       {hidden > 0 && more && (
         <button type="button" class={styles.more} onClick={() => setShown(more)}>
-          {hidden} earlier {hidden === 1 ? 'turn' : 'turns'} hidden · show the last {more}
+          {hidden} earlier {hidden === 1 ? 'run' : 'runs'} hidden · show the last {more}
         </button>
       )}
-      {turns.length === 0 && <p class="muted">No turns yet. Start the loop, or run one step.</p>}
-      {visible.map((t) => (
-        <TurnView key={t.turn} t={t} live={t.turn === status.value?.loop.turn ? live : undefined} />
-      ))}
-      {chat?.queued.map((text, i) => (
-        // biome-ignore lint/suspicious/noArrayIndexKey: the queue only grows until it is taken whole
-        <div key={i} class={`${styles.you} ${styles.queued}`}>
-          {text}
-          <span class={styles.bubbleMeta}>joins the turn at its next step</span>
-        </div>
-      ))}
+      {items.length === 0 && <p class="muted">Nothing yet. Start five, or say something below.</p>}
+      {visible.map((i) =>
+        i.kind === 'run' ? (
+          <RunView
+            key={`r${i.run.n}`}
+            g={i.run}
+            active={active.get(i.run.n)}
+            chat={chat?.run === i.run.n ? chat : undefined}
+          />
+        ) : (
+          <Line key={i.e.seq} e={i.e} />
+        ),
+      )}
+      {chat && !chatShown && <Queued chat={chat} />}
       <div ref={bottom} />
       <Composer chat={chat} />
     </div>
@@ -127,8 +164,7 @@ function Controls() {
   const s = status.value;
   const [error, setError] = useState<string | null>(null);
   if (!s) return null;
-  const { loop } = s;
-  const act = async (what: 'start' | 'pause' | 'stop' | 'step') => {
+  const act = async (what: 'start' | 'pause' | 'stop') => {
     setError(null);
     try {
       await post(`/loop/${what}`);
@@ -137,31 +173,31 @@ function Controls() {
       setError(message(err));
     }
   };
-  const used = loop.promptTokens ?? 0;
+  const busy = s.active.filter((a) => a.live?.phase === 'model').length;
+  const tasks = s.active.filter((a) => a.kind === 'task').length;
   const facts = [
-    loop.busy ? `step ${loop.step} of ${s.maxSteps}` : loop.running ? 'between turns' : 'paused',
-    `${s.messages} messages`,
-    loop.promptTokens === null
-      ? 'context not measured yet'
-      : `${used.toLocaleString()} of ${s.contextTokens.toLocaleString()} tokens`,
+    s.running ? 'running' : 'paused',
+    `${tasks} ${tasks === 1 ? 'task' : 'tasks'} in progress`,
+    `model ${busy}/${s.slots}${s.queued ? `, ${s.queued} waiting` : ''}`,
+    `${s.board.open} open · ${s.board.done} done${s.board.failed ? ` · ${s.board.failed} failed` : ''}`,
   ];
   return (
     <header class={styles.bar}>
       <div class={styles.title}>
         <h2>
-          Turn {loop.turn} · {s.model}
+          five · {s.model}
           {s.think && ' · thinking'}
         </h2>
         <span class="muted">{facts.join(' · ')}</span>
       </div>
       <div class={styles.actions}>
-        <a class={styles.gauge} href="/workspace/context" title="Open the context">
-          <Gauge value={used} max={s.contextTokens} warnAt={s.contextTokens * 0.8} label="Context window used" />
+        <a class={styles.slots} href="/board" title="The board">
+          <Slots s={s.slots} busy={busy} queued={s.queued} />
         </a>
-        <ShownTurns />
-        {loop.retryAt && <Badge state="warn">retry at {clock(loop.retryAt)}</Badge>}
-        {loop.running ? (
-          <button type="button" class={styles.action} onClick={() => void act('pause')} title="Stop looping once this turn ends">
+        <Filters />
+        <ShownRuns />
+        {s.running ? (
+          <button type="button" class={styles.action} onClick={() => void act('pause')} title="Start no new runs">
             <Icon name="pause" size={16} />
             Pause
           </button>
@@ -171,46 +207,82 @@ function Controls() {
             Start
           </button>
         )}
-        {!loop.running && !loop.busy && (
-          <button type="button" class={styles.action} onClick={() => void act('step')} title="Run one turn">
-            <Icon name="step" size={16} />
-            Step
-          </button>
-        )}
-        {loop.busy && (
+        {s.active.some((a) => a.kind !== 'chat') && (
           <button
             type="button"
             class={styles.action}
             onClick={() => void act('stop')}
-            title="Pause, and end this turn now"
+            title="Pause, and stop the lead and task runs now; the chat goes on"
           >
             <Icon name="stop" size={16} />
-            Stop turn
+            Stop runs
           </button>
         )}
       </div>
+      <p class={styles.goal}>
+        <Icon name="flag" size={14} />
+        <span>{oneLine(s.goal, 220)}</span>
+        <a href="/config">change</a>
+      </p>
       {error && <p class="error">{error}</p>}
     </header>
   );
 }
 
-/** ‹ last N turns ›: how much of the timeline the page shows. */
-function ShownTurns() {
+/** The model's slots as squares: filled while a call runs, and how many wait. */
+function Slots({ s, busy, queued }: { s: number; busy: number; queued: number }) {
+  return (
+    <span class={styles.slotRow} role="img" aria-label={`${busy} of ${s} model slots busy, ${queued} waiting`}>
+      {Array.from({ length: s }, (_, i) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: one square per slot, in order
+        <span key={i} class={`${styles.slot} ${i < busy ? styles.slotBusy : ''}`} />
+      ))}
+    </span>
+  );
+}
+
+const FILTERS: { value: Filter; label: string }[] = [
+  { value: 'all', label: 'All' },
+  { value: 'lead', label: 'Lead' },
+  { value: 'task', label: 'Tasks' },
+  { value: 'chat', label: 'Chat' },
+];
+
+function Filters() {
+  return (
+    <div class={styles.filters} role="group" aria-label="Runs shown">
+      {FILTERS.map((f) => (
+        <button
+          key={f.value}
+          type="button"
+          aria-pressed={filter.value === f.value}
+          onClick={() => {
+            filter.value = f.value;
+            keep('five.runFilter', f.value);
+          }}
+        >
+          {f.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** ‹ last N runs ›: how much of the timeline the page shows. */
+function ShownRuns() {
   const i = SHOW.indexOf(shown.value);
   const n = shown.value;
   return (
-    <div class={styles.stepper} role="group" aria-label="Turns shown">
-      <button type="button" disabled={i <= 0} onClick={() => setShown(SHOW[i - 1] as number)} aria-label="Fewer turns">
+    <div class={styles.stepper} role="group" aria-label="Runs shown">
+      <button type="button" disabled={i <= 0} onClick={() => setShown(SHOW[i - 1] as number)} aria-label="Fewer runs">
         ‹
       </button>
-      <span>
-        last {n} {n === 1 ? 'turn' : 'turns'}
-      </span>
+      <span>last {n} runs</span>
       <button
         type="button"
         disabled={i >= SHOW.length - 1}
         onClick={() => setShown(SHOW[i + 1] as number)}
-        aria-label="More turns"
+        aria-label="More runs"
       >
         ›
       </button>
@@ -218,99 +290,176 @@ function ShownTurns() {
   );
 }
 
-function TurnView({ t, live }: { t: Turn; live?: LiveWork }) {
-  const prompt = t.started?.prompt;
+const kindIcon: Record<WorkerKind, IconName> = { lead: 'lead', chat: 'chat', task: 'worker' };
+
+/** One run: its worker and task, what it did, and how it ended. A finished run folds to its result. */
+function RunView({ g, active, chat }: { g: RunGroup; active?: ActiveRun; chat?: ChatStatus }) {
+  const kind = g.started?.kind ?? active?.kind ?? 'task';
+  const worker = g.started?.worker ?? active?.worker ?? '?';
+  const task = g.started?.task;
+  const running = Boolean(active);
+  const open = running || kind === 'chat' || opened.value.has(g.n);
+  const toggle = () => {
+    if (running || kind === 'chat') return;
+    const next = new Set(opened.value);
+    if (next.has(g.n)) next.delete(g.n);
+    else next.add(g.n);
+    opened.value = next;
+  };
+  const outcome = g.ended?.outcome;
+  const state = running ? 'running' : outcome === 'done' ? 'ok' : outcome === 'stopped' ? 'paused' : 'failed';
+  const steps = g.items.filter((e) => e.type === 'model').length;
+  const startedAt = g.started?.at ?? active?.startedAt;
   return (
-    <section class={styles.turn} aria-label={`Turn ${t.turn}`}>
-      {t.started && (
-        <header class={styles.turnHead}>
-          <span class={styles.turnNo}>Turn {t.turn}</span>
-          <At iso={t.started.at} />
-        </header>
+    <section class={`${styles.run} ${styles[kind]} ${open ? styles.open : ''}`} aria-label={`Run ${g.n}`}>
+      <button type="button" class={styles.runHead} onClick={toggle} aria-expanded={open}>
+        <span class={styles.kind}>
+          <Icon name={kindIcon[kind]} size={16} />
+        </span>
+        <span class={styles.runName}>{worker}</span>
+        {task && (
+          <span class={styles.runTask}>
+            #{task.id} {task.title}
+          </span>
+        )}
+        <span class={styles.runMeta}>
+          run {g.n}
+          {steps > 0 && ` · ${steps} ${steps === 1 ? 'call' : 'calls'}`}
+          {g.ended && ` · ${duration(g.ended.durationMs)}`}
+        </span>
+        {g.ended ? (
+          <Badge state={state}>{outcome}</Badge>
+        ) : running ? (
+          <Badge state="running">{active?.live?.phase === 'queued' ? 'waiting for the model' : 'working'}</Badge>
+        ) : null}
+        {startedAt && <span class={styles.at}>{clock(startedAt)}</span>}
+      </button>
+      {!open && g.ended && <Outcome e={g.ended} short />}
+      {open && (
+        <div class={styles.runBody}>
+          {g.started?.prompt && <Prompt kind={kind} text={g.started.prompt} />}
+          {g.items.map((e) => (
+            <RunItem key={e.seq} e={e} g={g} />
+          ))}
+          {chat && <Queued chat={chat} />}
+          {active?.live && <Working live={active.live} />}
+          {chat?.waitingUntil && !active?.live && <Waiting until={chat.waitingUntil} />}
+          {g.ended && kind !== 'chat' && <Outcome e={g.ended} />}
+        </div>
       )}
-      {t.started?.warning && (
-        <p class={`${styles.line} ${styles.warn}`}>
-          <At iso={t.started.at} />
-          <Kind icon="alert" />
-          {t.started.warning}
-        </p>
-      )}
-      {prompt !== undefined && <div class={styles.prompt}>{prompt}</div>}
-      {t.items.map((e) => {
-        switch (e.type) {
-          case 'model':
-            return e.chat ? <Answer key={e.seq} e={e} /> : <Step key={e.seq} e={e} results={t.results} />;
-          case 'chat':
-            return (
-              <div key={e.seq} class={styles.you}>
-                {e.text}
-                <span class={styles.bubbleMeta}>you · {clock(e.at)}</span>
-              </div>
-            );
-          case 'chat_ended':
-            return (
-              <p key={e.seq} class={styles.line}>
-                <At iso={e.at} />
-                <Kind icon="chat" />
-                Chat ended: {chatEndLabel[e.reason]}
-              </p>
-            );
-          case 'context':
-            return (
-              <p key={e.seq} class={styles.line}>
-                <At iso={e.at} />
-                <Kind icon={e.by === 'user' ? 'person' : e.by === 'five' ? 'chip' : 'edit'} />
-                {e.by === 'user' ? 'you' : e.by === 'five' ? 'five' : 'the agent'}: {e.change}
-              </p>
-            );
-          case 'inbox':
-            return (
-              <p key={e.seq} class={`${styles.line} ${styles.inbox}`}>
-                <At iso={e.at} />
-                <Kind icon="inbox" />
-                {e.from === 'five' ? 'to you' : e.asPrompt ? 'you wrote, as the next prompt' : 'you wrote'}: {e.subject && <strong>{e.subject} — </strong>}
-                {oneLine(e.text, 240)} ·{' '}
-                <a href="/inbox">inbox</a>
-              </p>
-            );
-          case 'supervisor':
-            return (
-              <p key={e.seq} class={styles.line}>
-                <At iso={e.at} />
-                <Kind icon="config" />
-                <a href="/config">config</a>: {e.change}
-              </p>
-            );
-          case 'turn_ended':
-            return (
-              <p key={e.seq} class={`${styles.end} ${e.reason === 'error' ? styles.failed : ''}`}>
-                <At iso={e.at} />
-                <span>
-                  <Kind icon="flag" />
-                  Turn {t.turn} ended: {endLabel[e.reason]}
-                  {e.error && ` — ${e.error}`}
-                  {t.started && ` · ${duration(Date.parse(e.at) - Date.parse(t.started.at))}`}
-                </span>
-                {prompt !== undefined && (
-                  <span class={styles.next}>
-                    {e.next === prompt ? 'next turn: same prompt' : `next prompt: ${oneLine(e.next, 160)}`}
-                  </span>
-                )}
-              </p>
-            );
-          case 'loop':
-            return (
-              <p key={e.seq} class={styles.line}>
-                <At iso={e.at} />
-                <Kind icon={e.state === 'started' ? 'play' : 'pause'} />
-                Loop {e.state}
-                {e.reason && `: ${e.reason}`}
-              </p>
-            );
-        }
-      })}
-      {live && <Working live={live} />}
     </section>
+  );
+}
+
+/** What a run was given: a task's title and input, or the lead's whole prompt, folded. */
+function Prompt({ kind, text }: { kind: WorkerKind; text: string }) {
+  if (kind === 'task' && text.length <= 400) return <div class={styles.prompt}>{text}</div>;
+  return (
+    <details class={styles.thinking}>
+      <summary>{kind === 'lead' ? 'What the lead was given' : 'The task'}</summary>
+      <pre class={styles.pre}>{text}</pre>
+    </details>
+  );
+}
+
+function Outcome({ e, short }: { e: Of<'run_ended'>; short?: boolean }) {
+  const text = e.error ?? e.result ?? '';
+  if (!text) return null;
+  if (short) return <p class={`${styles.result} ${e.error ? styles.failed : ''}`}>{oneLine(text, 200)}</p>;
+  return (
+    <div class={`${styles.end} ${e.error ? styles.failed : ''}`}>
+      <span class={styles.endLabel}>{e.error ? 'Error' : 'Result'}</span>
+      {e.error ? <pre class={styles.pre}>{e.error}</pre> : <Markdown text={text} class={styles.md} />}
+    </div>
+  );
+}
+
+function RunItem({ e, g }: { e: Event; g: RunGroup }) {
+  switch (e.type) {
+    case 'model':
+      return e.chat ? <Answer e={e} /> : <Step e={e} results={g.results} />;
+    case 'chat':
+      return (
+        <div class={styles.you}>
+          {e.text}
+          <span class={styles.bubbleMeta}>you · {clock(e.at)}</span>
+        </div>
+      );
+    default:
+      return <Line e={e} />;
+  }
+}
+
+/** An event on a line of its own: five's, the person's, or a run's note. */
+function Line({ e }: { e: Event }) {
+  const line = (icon: IconName, body: preact.ComponentChildren, cls = '') => (
+    <p class={`${styles.line} ${cls}`}>
+      <At iso={e.at} />
+      <Kind icon={icon} />
+      {body}
+    </p>
+  );
+  switch (e.type) {
+    case 'task':
+      return line(
+        'board',
+        <>
+          {e.action === 'posted' ? `${e.by === 'person' ? 'you' : e.by} posted` : e.action} task{' '}
+          <a href={`/board?task=${e.id}`}>#{e.id}</a> for {e.worker}: {e.title}
+        </>,
+        e.action === 'failed' ? styles.warn : '',
+      );
+    case 'chat_ended':
+      return line('chat', `Chat ended: ${e.reason === 'left' ? 'you left it' : 'no answer from you in time'}${e.saved ? ` · saved to ${e.saved}` : ''}`);
+    case 'goal':
+      return line('flag', <>{e.by === 'person' ? 'you' : e.by} set the goal: {oneLine(e.text, 240)}</>);
+    case 'worker':
+      return line(
+        'worker',
+        <>
+          worker <a href={`/workspace/workers/${e.name}`}>{e.name}</a> {e.action}
+          {e.revision ? ` (revision ${e.revision})` : ''}
+        </>,
+      );
+    case 'inbox':
+      return line(
+        'inbox',
+        <>
+          {e.from === 'five' ? 'to you' : 'you wrote'}: {e.subject && <strong>{e.subject} — </strong>}
+          {oneLine(e.text, 240)} · <a href="/inbox">inbox</a>
+        </>,
+        styles.inbox,
+      );
+    case 'settings':
+      return line('config', <><a href="/config">config</a>: {e.change}</>);
+    case 'loop':
+      return line(e.state === 'started' ? 'play' : e.state === 'paused' ? 'pause' : 'stop', `Five ${e.state}${e.reason ? `: ${e.reason}` : ''}`);
+    default:
+      return null;
+  }
+}
+
+/** The person's messages waiting for five to finish its answer. */
+function Queued({ chat }: { chat: ChatStatus }) {
+  return (
+    <>
+      {chat.queued.map((text, i) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: the queue only grows until it is taken whole
+        <div key={i} class={`${styles.you} ${styles.queued}`}>
+          {text}
+          <span class={styles.bubbleMeta}>five reads it once it has answered</span>
+        </div>
+      ))}
+    </>
+  );
+}
+
+function Waiting({ until }: { until: string }) {
+  const left = Math.max(0, Math.round((Date.parse(until) - Date.now()) / 1000));
+  return (
+    <p class={styles.waiting}>
+      five waits for you · {Math.floor(left / 60)}:{String(left % 60).padStart(2, '0')} left
+    </p>
   );
 }
 
@@ -326,8 +475,8 @@ function Attached({ result }: { result: string }) {
 }
 
 /**
- * The step in progress, so the page feels alive: a pulsing dot, what five is
- * doing and for how long, and the model's thinking and reply as they stream in.
+ * The step in progress, so the page feels alive: a pulsing dot, what the run
+ * is doing and for how long, and the model's thinking and reply as they stream in.
  */
 function Working({ live }: { live: LiveWork }) {
   const thinking = useRef<HTMLPreElement>(null);
@@ -336,19 +485,24 @@ function Working({ live }: { live: LiveWork }) {
   }, [live.thinking]);
   const secs = Math.max(0, Math.round((Date.now() - Date.parse(live.startedAt)) / 1000));
   const doing =
-    live.phase === 'tool'
-      ? `running ${live.tool}`
-      : live.content
-        ? 'writing'
-        : live.thinking
-          ? 'thinking'
-          : 'working';
+    live.phase === 'queued'
+      ? 'waiting for a model slot'
+      : live.phase === 'tool'
+        ? `running ${live.tool}`
+        : live.phase === 'code'
+          ? 'running its code'
+          : live.content
+            ? 'writing'
+            : live.thinking
+              ? 'thinking'
+              : 'working';
   return (
     <div class={styles.working} role="status" aria-live="polite">
       <div class={styles.workingHead}>
         <span class={styles.pulse} aria-hidden="true" />
         <span>
-          step {live.step} · {doing}… <span class={styles.elapsed}>{secs} s</span>
+          {live.step > 0 && `call ${live.step} · `}
+          {doing}… <span class={styles.elapsed}>{secs} s</span>
         </span>
       </div>
       {live.phase === 'model' && live.thinking && (
@@ -366,7 +520,7 @@ function At({ iso }: { iso: string }) {
   return <span class={styles.at}>{clock(iso)}</span>;
 }
 
-/** What kind of event a line is, and so whose: five's, the agent's or yours. */
+/** What kind of event a line is, and so whose. */
 function Kind({ icon }: { icon: IconName }) {
   return (
     <span class={styles.kind}>
@@ -374,21 +528,6 @@ function Kind({ icon }: { icon: IconName }) {
     </span>
   );
 }
-
-const endLabel: Record<Of<'turn_ended'>['reason'], string> = {
-  replied: 'the agent replied',
-  end_turn: 'the agent called end_turn',
-  max_steps: 'out of steps',
-  stopped: 'stopped',
-  error: 'failed',
-  chat: 'the chat ended, and the loop is paused',
-};
-
-const chatEndLabel: Record<Of<'chat_ended'>['reason'], string> = {
-  left: 'you left it',
-  timeout: 'no answer from you in time',
-  turn_ended: 'the turn ended',
-};
 
 /** Five's reply in a chat: a bubble on the left, the thinking behind it folded. */
 function Answer({ e }: { e: Of<'model'> }) {
@@ -408,18 +547,60 @@ function Answer({ e }: { e: Of<'model'> }) {
   );
 }
 
+function Step({ e, results }: { e: Of<'model'>; results: Map<string, Of<'tool'>> }) {
+  return (
+    <div class={styles.step}>
+      <div class={styles.stepHead}>
+        <At iso={e.at} />
+        call {e.step} · {duration(e.durationMs)}
+        {e.waitedMs !== undefined && ` · waited ${duration(e.waitedMs)} for the model`}
+        {e.promptTokens !== undefined && ` · ${e.promptTokens.toLocaleString()} tokens in`}
+        {e.fromText && ' · calls read from text'}
+      </div>
+      {e.prompt && (
+        <details class={styles.thinking}>
+          <summary>Asked</summary>
+          <pre class={styles.pre}>{e.prompt}</pre>
+        </details>
+      )}
+      {e.thinking && (
+        <details class={styles.thinking}>
+          <summary>Thinking</summary>
+          <pre class={styles.pre}>{e.thinking}</pre>
+        </details>
+      )}
+      {e.content && !e.fromText && (e.prompt ? <Code class={styles.pre} text={e.content} /> : <Markdown text={e.content} class={styles.md} />)}
+      {e.calls.map((c) => {
+        const r = results.get(c.id);
+        return (
+          <details key={c.id} class={styles.tool}>
+            <summary>
+              <span class={styles.toolName}>{c.name}</span>
+              {r && <span class={styles.toolTime}>{duration(r.durationMs)}</span>}
+              <span class={`${styles.toolState} ${r && !r.ok ? styles.failed : 'muted'}`}>
+                {r ? oneLine(r.result, 120) : 'running…'}
+              </span>
+              {r && <At iso={r.at} />}
+            </summary>
+            <Code class={styles.pre} text={prettyArgs(c.arguments)} lang="json" />
+            {r && <Code class={styles.pre} text={r.result} />}
+            {r && <Attached result={r.result} />}
+          </details>
+        );
+      })}
+    </div>
+  );
+}
+
 /**
- * Where the person chats with five. A message joins the running turn at its
- * next step, or runs one turn when the loop is paused; five's replies come
- * back in the timeline, and the turn waits for the person until they leave.
+ * Where the person chats with five. A message opens the chat — a run of its
+ * own, beside the others — or follows in it; five's answers come back in the
+ * timeline, and it waits for the person until they leave.
  */
 function Composer({ chat }: { chat?: ChatStatus }) {
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const s = status.value;
-  if (!s) return null;
-  const { loop } = s;
   const send = async () => {
     const t = text.trim();
     if (!t || sending) return;
@@ -444,18 +625,11 @@ function Composer({ chat }: { chat?: ChatStatus }) {
       setError(message(err));
     }
   };
-  const left = chat?.waitingUntil ? Math.max(0, Math.round((Date.parse(chat.waitingUntil) - Date.now()) / 1000)) : 0;
   const hint = chat?.waitingUntil
-    ? `five is waiting for you · ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')} left, then its work goes on`
-    : chat?.open
+    ? 'five is waiting for you'
+    : chat?.busy
       ? 'five is answering…'
-      : chat?.queued.length
-        ? 'your message joins the turn at its next step'
-        : loop.busy
-          ? 'chat with five: your message joins this turn at its next step'
-          : loop.running
-            ? 'chat with five: your message starts the next turn now'
-            : 'chat with five: the loop is paused, so your message runs one turn for the chat';
+      : 'chat with five: it answers in a run of its own while the others keep working';
   return (
     <form
       class={styles.composer}
@@ -483,12 +657,12 @@ function Composer({ chat }: { chat?: ChatStatus }) {
             <Icon name="send" size={16} />
             Send
           </button>
-          {(chat?.open || chat?.queued.length) && (
+          {chat && (
             <button
               type="button"
               class={styles.action}
               onClick={() => void leave()}
-              title="End the chat: the turn carries on with its work, or ends while the loop is paused"
+              title="End the chat: the lead reads it at its next run"
             >
               <Icon name="leave" size={16} />
               Leave chat
@@ -502,43 +676,5 @@ function Composer({ chat }: { chat?: ChatStatus }) {
       </span>
       {error && <p class="error">{error}</p>}
     </form>
-  );
-}
-
-function Step({ e, results }: { e: Of<'model'>; results: Map<string, Of<'tool'>> }) {
-  return (
-    <div class={styles.step}>
-      <div class={styles.stepHead}>
-        <At iso={e.at} />
-        step {e.step} · {duration(e.durationMs)}
-        {e.promptTokens !== undefined && ` · ${e.promptTokens.toLocaleString()} prompt tokens`}
-        {e.fromText && ' · calls read from text'}
-      </div>
-      {e.thinking && (
-        <details class={styles.thinking}>
-          <summary>Thinking</summary>
-          <pre class={styles.pre}>{e.thinking}</pre>
-        </details>
-      )}
-      {e.content && !e.fromText && <Markdown text={e.content} class={styles.md} />}
-      {e.calls.map((c) => {
-        const r = results.get(c.id);
-        return (
-          <details key={c.id} class={styles.tool}>
-            <summary>
-              <span class={styles.toolName}>{c.name}</span>
-              {r && <span class={styles.toolTime}>{duration(r.durationMs)}</span>}
-              <span class={`${styles.toolState} ${r && !r.ok ? styles.failed : 'muted'}`}>
-                {r ? oneLine(r.result, 120) : 'running…'}
-              </span>
-              {r && <At iso={r.at} />}
-            </summary>
-            <Code class={styles.pre} text={prettyArgs(c.arguments)} lang="json" />
-            {r && <Code class={styles.pre} text={r.result} />}
-            {r && <Attached result={r.result} />}
-          </details>
-        );
-      })}
-    </div>
   );
 }

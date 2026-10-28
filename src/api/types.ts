@@ -17,21 +17,27 @@ export interface ToolCall {
   function: { name: string; arguments: string };
 }
 
-/**
- * Why a turn ended: the model replied without a call, called end_turn, ran out of steps, was stopped, failed,
- * or a chat ended while the loop was paused.
- */
-export type TurnEnd = "replied" | "end_turn" | "max_steps" | "stopped" | "error" | "chat";
+/** How a run ended: its work done, failed, stopped, out of its context budget, or out of steps. */
+export type RunEnd = "done" | "failed" | "stopped" | "budget" | "max_steps";
 
-/** Why a chat ended: the person left it, did not answer in time, or the turn it was in ended. */
-export type ChatEnd = "left" | "timeout" | "turn_ended";
+/** Why a chat ended: the person left it, or did not answer in time. */
+export type ChatEnd = "left" | "timeout";
+
+/**
+ * A worker: the lead (plans, posts tasks, writes task workers), the chat
+ * (talks with the person) — both fixed, five's own code — or a task worker,
+ * code the lead wrote, run for one task at a time.
+ */
+export type WorkerKind = "lead" | "chat" | "task";
 
 export type EventBody =
   | {
-      type: "turn_started";
-      prompt: string;
-      /** Five's warning put before the prompt: the context is near full. */
-      warning?: string;
+      type: "run_started";
+      worker: string;
+      kind: WorkerKind;
+      task?: { id: number; title: string };
+      /** What the run's model sees first, when it has a model context: its prompt. */
+      prompt?: string;
     }
   | {
       type: "model";
@@ -41,11 +47,15 @@ export type EventBody =
       calls: { id: string; name: string; arguments: string }[];
       /** Calls recovered from the reply's text rather than sent as tool calls. */
       fromText?: boolean;
-      /** A reply to the person, in a chat. */
+      /** A reply to the person, in the chat. */
       chat?: boolean;
       promptTokens?: number;
       completionTokens?: number;
       durationMs: number;
+      /** How long the call waited for a free model slot first. */
+      waitedMs?: number;
+      /** For a one-shot call from a task worker's code (five.llm.ask): what it asked. */
+      prompt?: string;
     }
   | {
       type: "tool";
@@ -57,51 +67,38 @@ export type EventBody =
       ok: boolean;
       durationMs: number;
     }
-  | { type: "turn_ended"; reason: TurnEnd; next: string; error?: string }
-  | { type: "context"; by: "model" | "user" | "five"; change: string }
-  /** A message in the inbox: five's to the person, or the person's to five. */
-  | { type: "inbox"; from: InboxMessage["from"]; subject?: string; text: string; asPrompt?: boolean }
-  /** The person's chat message, as it joins the turn. */
+  | { type: "run_ended"; outcome: RunEnd; result?: string; error?: string; durationMs: number }
+  | {
+      type: "task";
+      action: "posted" | "cancelled" | "done" | "failed";
+      id: number;
+      worker: string;
+      title: string;
+      /** Who posted it: lead, chat, or the person. */
+      by?: string;
+    }
+  /** The person's chat message, as the chat takes it. */
   | { type: "chat"; text: string }
-  | { type: "chat_ended"; reason: ChatEnd }
-  | { type: "loop"; state: "started" | "paused"; reason?: string }
-  /** The supervisor's settings changed, from the API. */
-  | { type: "supervisor"; change: string };
+  | { type: "chat_ended"; reason: ChatEnd; saved?: string }
+  /** A message in the inbox: five's to the person, or the person's to five. */
+  | { type: "inbox"; from: InboxMessage["from"]; subject?: string; text: string }
+  | { type: "goal"; text: string; by: string }
+  | { type: "worker"; action: "defined" | "deleted"; name: string; revision?: number }
+  | { type: "loop"; state: "started" | "paused" | "stopped"; reason?: string }
+  /** The settings changed, from the API. */
+  | { type: "settings"; change: string };
 
-export type Event = EventBody & { seq: number; at: string; turn: number };
+/** An event: `run` is the run it belongs to, 0 for none. */
+export type Event = EventBody & { seq: number; at: string; run: number };
 
-export interface LoopStatus {
-  /** Turns follow one another until paused. */
-  running: boolean;
-  /** A turn is in progress. */
-  busy: boolean;
-  turn: number;
-  /** The model call the current turn is on; 0 between turns. */
-  step: number;
-  promptTokens: number | null;
-  /** When the loop waits after a failed turn, until when. */
-  retryAt: string | null;
-  /** What the turn is doing right now: the model writing its reply, or a tool running. */
-  live?: LiveWork;
-  /** The chat, while one is open or a message waits to join a turn. */
-  chat?: ChatStatus;
-}
-
-/** A chat with the person, inside a turn: the agent's replies go to the person, and the turn waits for theirs. */
-export interface ChatStatus {
-  /** The agent has the person's message: its replies go to them. */
-  open: boolean;
-  /** The turn waits for the person's next message, until then; it carries on without them after. */
-  waitingUntil?: string;
-  /** The person's messages sent but not yet in the context: they join the turn at its next step. */
-  queued: string[];
-}
-
-/** The step in progress, for the UI to show it as it happens. */
+/** The step a run is on, for the UI to show it as it happens. */
 export interface LiveWork {
   step: number;
-  /** "model": the model is writing; "tool": one of its calls runs. */
-  phase: "model" | "tool";
+  /**
+   * "queued": waiting for a model slot; "model": the model is writing; "tool": one of its calls runs;
+   * "code": a task worker's own code runs.
+   */
+  phase: "queued" | "model" | "tool" | "code";
   /** When this phase began. */
   startedAt: string;
   /** The tool running, in the "tool" phase. */
@@ -111,20 +108,58 @@ export interface LiveWork {
   content?: string;
 }
 
+/** A run in progress. */
+export interface ActiveRun {
+  run: number;
+  worker: string;
+  kind: WorkerKind;
+  task?: { id: number; title: string };
+  startedAt: string;
+  /** Model calls so far. */
+  step: number;
+  /** The size of its context at its last call. */
+  promptTokens?: number;
+  live?: LiveWork;
+}
+
+/** The chat with the person: one run, open until they leave or stop answering. */
+export interface ChatStatus {
+  /** The chat's run. */
+  run: number;
+  /** Five is answering. */
+  busy: boolean;
+  /** Five answered and waits for the person, until then. */
+  waitingUntil?: string;
+  /** The person's messages not yet taken: they follow once five has answered. */
+  queued: string[];
+}
+
+export interface BoardCounts {
+  open: number;
+  running: number;
+  done: number;
+  failed: number;
+}
+
 export interface Status {
   model: string;
   endpoint: string;
+  /** The context window of one model slot, in tokens. */
   contextTokens: number;
   think: boolean;
-  maxSteps: number;
   workspace: string;
-  loop: LoopStatus;
-  /** Messages in the context. */
-  messages: number;
-  /** Tools the agent built. */
+  /** Five schedules runs: the lead, and task workers for open tasks. Paused, only the chat runs. */
+  running: boolean;
+  active: ActiveRun[];
+  /** Model calls at once, and how many wait for one. */
+  slots: number;
+  queued: number;
+  board: BoardCounts;
+  chat?: ChatStatus;
+  goal: string;
   tools: number;
-  /** Libraries the agent wrote. */
   libraries: number;
+  workers: number;
   /** The last event's seq: a client that has it is up to date. */
   lastSeq: number;
   /** The id of five's latest message to the person; 0 when none. */
@@ -135,16 +170,14 @@ export interface Status {
 export interface InboxMessage {
   id: number;
   at: string;
-  /** The turn it was sent in; for the person's, the turn running or last ended then. */
+  /** The run it was sent from; 0 for the person's. */
   turn: number;
   from: "five" | "person";
   /** What it is about, in a few words: five's always have one. */
   subject?: string;
   text: string;
-  /** For the person's: the turn it was put before, once delivered. */
+  /** For the person's: the lead run that read it, once read. */
   deliveredTurn?: number;
-  /** A person's message sent as the next turn's prompt, in place of the one the agent set. */
-  asPrompt?: boolean;
 }
 
 export interface InboxPage {
@@ -152,18 +185,52 @@ export interface InboxPage {
   messages: InboxMessage[];
 }
 
-export interface ContextView {
-  system: string;
-  /** Five's self block, rebuilt for every model call and sent after the messages. */
-  self: string;
-  next: string;
-  turn: number;
-  messages: Message[];
-}
-
 export interface EventsPage {
   events: Event[];
   last: number;
+}
+
+/** A task on the board: one worker's job, posted by the lead, the chat, or the person. */
+export interface Task {
+  id: number;
+  worker: string;
+  title: string;
+  /** What the worker gets: text, or JSON as text. */
+  input: string;
+  status: "open" | "running" | "done" | "failed" | "cancelled";
+  /** The worker's result (its start when long: the whole is in the file it names). */
+  result?: string;
+  error?: string;
+  postedBy: string;
+  createdAt: string;
+  startedAt?: string;
+  endedAt?: string;
+  /** The run that took it. */
+  run?: number;
+}
+
+export interface BoardPage {
+  /** Newest first. */
+  tasks: Task[];
+  counts: BoardCounts;
+}
+
+export interface WorkerInfo {
+  name: string;
+  kind: WorkerKind;
+  description: string;
+  /** Fixed workers are five's own; task workers are code with revisions, the lead's to change. */
+  fixed: boolean;
+  revision?: number;
+  updatedAt?: string;
+  libs?: { name: string; revision: number; current?: number }[];
+  /** Tasks it did, and failed. */
+  done: number;
+  failed: number;
+}
+
+export interface WorkerDetail extends WorkerInfo {
+  source: string;
 }
 
 export interface ToolInfo {
@@ -181,13 +248,13 @@ export interface ToolDetail extends ToolInfo {
   source: string;
 }
 
-/** A library: shared code tools import as "lib:<name>". */
+/** A library: shared code tools and workers import as "lib:<name>". */
 export interface LibraryInfo {
   name: string;
   description: string;
   revision: number;
   updatedAt: string;
-  /** The tools built on it, each at the revision bundled into it. */
+  /** The tools and task workers built on it, each at the revision bundled into it. */
   usedBy: { tool: string; revision: number }[];
 }
 
@@ -264,12 +331,12 @@ export interface DbResult {
 export interface ProcessInfo {
   /** The runner's run id. */
   id: string;
-  /** run_js code, a tool the agent built (also when called from inside a run), or a define_tool trial. */
-  kind: "code" | "tool" | "trial";
+  /** run_js code, a tool the agent built (also when called from inside a run), a define_tool trial, or a task worker. */
+  kind: "code" | "tool" | "trial" | "worker";
   /** run_js, the tool's name, or "define_tool <name>". */
   label: string;
-  /** The loop's turn and step when it started. */
-  turn: number;
+  /** The run that started it, and its step then; 0 when none did. */
+  run: number;
   step: number;
   startedAt: string;
   state: "installing" | "running" | "ok" | "failed" | "killed";
@@ -292,30 +359,23 @@ export interface ProcessDetail extends ProcessInfo {
   value?: unknown;
 }
 
-/** How the supervisor steps into the loop: see src/agent/supervisor.ts. Shares are percent of the window. */
-export interface SupervisorSettings {
-  contextWarn: number;
-  contextTrim: number;
-  trimTo: number;
-  foldReplies: boolean;
-  replySummaryChars: number;
-  dropIdle: boolean;
-  idleTurns: number;
-  staleTurns: number;
-  refuseRepeat: boolean;
-  refuseDone: boolean;
-  refuseWaiting: boolean;
-  selfBlock: boolean;
-  selfNoteChars: number;
-  messagesPerTurn: number;
+/** How five schedules its workers: see src/workers/settings.ts. */
+export interface Settings {
+  slots: number;
+  taskRuns: number;
+  leadEverySeconds: number;
+  minOpenTasks: number;
+  maxSteps: number;
+  runTokens: number;
   resultChars: number;
-  imageSide: number;
   chatWaitSeconds: number;
+  taskTimeoutSeconds: number;
+  imageSide: number;
 }
 
-/** One setting, as the web UI shows it: a flag when its value is a boolean, else a whole number. */
-export interface SupervisorField {
-  key: keyof SupervisorSettings;
+/** One setting, as the web UI shows it: a whole number. */
+export interface SettingField {
+  key: keyof Settings;
   group: string;
   label: string;
   help: string;
@@ -324,13 +384,11 @@ export interface SupervisorField {
   max?: number;
 }
 
-export interface SupervisorView {
-  settings: SupervisorSettings;
+export interface SettingsView {
+  settings: Settings;
   /** The settings the environment gives; a reset goes back to them. */
-  defaults: SupervisorSettings;
+  defaults: Settings;
   /** The settings changed from their defaults. */
-  changed: (keyof SupervisorSettings)[];
-  fields: SupervisorField[];
-  /** What the supervisor counts now. */
-  state: { idle: number; stale: number };
+  changed: (keyof Settings)[];
+  fields: SettingField[];
 }

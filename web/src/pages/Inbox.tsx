@@ -8,10 +8,10 @@ import { Markdown } from '../markdown';
 import styles from './Inbox.module.css';
 
 /**
- * The messages between five and you: what the agent chose to tell you with
+ * The messages between five and you: what the lead chose to tell you with
  * message_person, and what you wrote back, newest first. A message you send is
- * put before the prompt of the next turn, or, sent as the next prompt, is that
- * prompt; the loop never waits for one.
+ * in the lead's prompt at its next run, which comes soon; nobody waits for one.
+ * To talk now, use the chat on the Activity page.
  */
 export function Inbox() {
   const [list, setList] = useState<InboxMessage[] | null>(null);
@@ -19,7 +19,7 @@ export function Inbox() {
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const last = status.value?.inboxLast ?? 0;
-  const turn = status.value?.loop.turn ?? 0;
+  const runs = status.value?.active.length ?? 0;
 
   const load = () =>
     get<InboxPage>('/inbox').then(
@@ -30,16 +30,16 @@ export function Inbox() {
       (err: unknown) => setError(message(err)),
     );
 
-  // Reload when five sends one, and as turns pass: a delivery shows then.
+  // Reload when five sends one, and as runs come and go: a reading shows then.
   useEffect(() => {
     void load();
-  }, [last, turn]);
+  }, [last, runs]);
   useEffect(() => markInboxSeen(last), [last]);
 
-  const send = async (asPrompt = false) => {
+  const send = async () => {
     setSending(true);
     try {
-      await post<InboxMessage>('/inbox', { text: text.trim(), ...(asPrompt && { asPrompt }) });
+      await post<InboxMessage>('/inbox', { text: text.trim() });
       setText('');
       await load();
     } catch (err) {
@@ -62,7 +62,7 @@ export function Inbox() {
           class={styles.text}
           rows={3}
           value={text}
-          placeholder="Write to five. It reads this before its next turn, and goes on with its own work."
+          placeholder="Write to five. Its lead reads this at its next run, and goes on with its own work."
           aria-label="Message to five"
           onInput={(e) => setText((e.target as HTMLTextAreaElement).value)}
           onKeyDown={(e) => {
@@ -72,16 +72,10 @@ export function Inbox() {
         <div class={styles.row}>
           <span class="muted">⌘↩ sends</span>
           <span class={styles.actions}>
-            <button
-              type="button"
-              class={ui.action}
-              disabled={sending || !text.trim()}
-              onClick={() => void send(true)}
-              title="The next turn starts with this message as its prompt, in place of the one the agent set"
-            >
-              <Icon name="next" size={16} />
-              Send as next prompt
-            </button>
+            <a class={ui.action} href="/" title="Talk with five now, on the Activity page">
+              <Icon name="chat" size={16} />
+              Chat instead
+            </a>
             <button type="submit" class="button" disabled={sending || !text.trim()}>
               {sending ? 'Sending…' : 'Send'}
             </button>
@@ -92,7 +86,7 @@ export function Inbox() {
       {error && <p class="error">{error}</p>}
       {list === null && <p class="muted">Loading…</p>}
       {list?.length === 0 && (
-        <p class="card muted">No messages yet. The agent writes here with message_person, at most once a turn.</p>
+        <p class="card muted">No messages yet. The lead writes here with message_person, at most once a run.</p>
       )}
       <ol class={styles.list}>
         {list?.map((m) => (
@@ -100,18 +94,11 @@ export function Inbox() {
             <header class={styles.head}>
               <strong>{m.from === 'five' ? 'five' : 'you'}</strong>
               <span class="muted">
-                turn {m.turn} · {clock(m.at)} · {ago(m.at)}
+                {m.from === 'five' && `run ${m.turn} · `}
+                {clock(m.at)} · {ago(m.at)}
               </span>
               {m.from === 'person' && (
-                <span class="muted">
-                  {m.asPrompt
-                    ? m.deliveredTurn
-                      ? `turn ${m.deliveredTurn}'s prompt`
-                      : 'the next turn\'s prompt'
-                    : m.deliveredTurn
-                      ? `read on turn ${m.deliveredTurn}`
-                      : 'goes before the next turn'}
-                </span>
+                <span class="muted">{m.deliveredTurn ? `read by the lead, run ${m.deliveredTurn}` : 'the lead reads it next'}</span>
               )}
             </header>
             {m.subject && <h2 class={styles.subject}>{m.subject}</h2>}

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// five: runs the loop, with the HTTP API and web UI, until stopped.
-// The loop resumes if it was running when five last stopped; otherwise it
+// five: runs its workers, with the HTTP API and web UI, until stopped.
+// They resume if they were running when five last stopped; otherwise five
 // waits for Start in the UI, unless FIVE_AUTOSTART=on.
 
 import * as path from "node:path";
@@ -38,8 +38,7 @@ log.info("five started", {
   context_tokens: cfg.contextTokens,
   think: cfg.think,
   workspace: cfg.workspace,
-  turn: five.loop.ctx.turn,
-  messages: five.loop.ctx.messages.length,
+  slots: five.five.settings.current.slots,
 });
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -56,13 +55,13 @@ await new Promise<void>((resolve, reject) => {
 });
 log.info("api listening", { addr: cfg.apiAddr, url: `http://${host.includes(":") ? `[${host}]` : host}:${port}` });
 
-if (cfg.autostart || five.loop.wasRunning) five.loop.start();
+if (cfg.autostart || five.five.wasRunning) five.five.start();
 
 let closing = false;
 async function close(code: number): Promise<void> {
   if (closing) process.exit(code);
   closing = true;
-  log.info("five stopping", { busy: five.loop.status().busy });
+  log.info("five stopping", { runs: five.five.status().active.length });
   server.closeAllConnections();
   server.close();
   await five.close();

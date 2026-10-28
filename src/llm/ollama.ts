@@ -66,6 +66,7 @@ export class Ollama implements ChatModel {
     log = noopLogger,
     image,
     onProgress,
+    format,
   }: CompletionRequest): Promise<Completion> {
     const think = (await this.canThink()) ? this.opts.think : undefined;
     const body = JSON.stringify({
@@ -77,6 +78,7 @@ export class Ollama implements ChatModel {
       // a long generation on a busy local model. Chunks keep it alive.
       stream: true,
       ...(think !== undefined && { think }),
+      ...(format && { format }),
       options: { num_ctx: this.opts.contextTokens, ...(maxTokens && { num_predict: maxTokens }) },
       ...(this.opts.keepAlive && { keep_alive: this.opts.keepAlive }),
     });
