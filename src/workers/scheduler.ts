@@ -257,7 +257,7 @@ export class Scheduler {
     this.readFeeds(s, now);
     const counts = this.board.counts();
     // A new five's lead waits for its workers' first results, to plan from them rather than from memory.
-    const ready = counts.done + counts.failed > 0 || counts.running === 0;
+    const ready = counts.done + counts.failed > 0 || counts.running + counts.open === 0;
     const low = ready && counts.open < s.minOpenTasks && now - this.lastLead >= LEAD_COOLDOWN_MS;
     const due = this.lastLead ? now - this.lastLead >= s.leadEverySeconds * 1000 : ready;
     if (!leading && (low || due || (this.leadWanted && now - this.lastLead >= 5_000))) this.startLead();

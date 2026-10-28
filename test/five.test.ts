@@ -977,12 +977,14 @@ test("the API: status, the board, settings, the goal, the inbox, and a reset", a
   }
 });
 
-test("five posts a feeds task on time", async () => {
+test("five posts a feeds task on time, and the lead of a new five waits for the first result", async () => {
   const { five } = make(() => ({ content: "ok" }), { FIVE_FEEDS_EVERY: "900" });
   five.five.settings.update({ taskRuns: 0, minOpenTasks: 0 });
   five.five.start();
   await new Promise((r) => setTimeout(r, 200));
   five.five.pause();
+  // Nothing has ended yet, so the lead has nothing to plan from: it has not run.
+  assert.ok(!events(five).some((e) => e.type === "run_started"));
   // One task, by five: the next waits for it to end and its time to come.
   assert.deepEqual(
     five.five.board.list().map((t) => [t.worker, t.title, t.postedBy]),
