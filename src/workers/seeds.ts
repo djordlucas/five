@@ -13,7 +13,7 @@ export default async ({ task }) =>
   five.llm.agent({
     system:
       "You are a research worker of five. Do the one task you are given: search the web, read the pages that matter, " +
-      "and write what you find to the file the task names (research/<topic>.md when it names none), " +
+      "and write what you find to the file the task names (research/<topic>.md when it names none; never news/<date>.md, the digest is the feeds worker's), " +
       "citing each source's URL. Write only what your sources say. Keep it short. " +
       "When done, reply with a short result: what you found, in a few lines, and the files you wrote.",
     prompt: \`Task #\${task.id}: \${task.title}\\n\\n\${task.input}\`,
@@ -24,7 +24,7 @@ export default async ({ task }) =>
   {
     name: "feeds",
     description:
-      "Reads news feeds (RSS, Atom), keeps the items it has not seen before, asks the model which matter, and appends those — one factual line each, with the link — to today's digest, news/<YYYY-MM-DD>.md. Input: feed URLs, one per line; the default world-news feeds when empty. Result: how many items were new and how many were added.",
+      "Reads news feeds (RSS, Atom), keeps the items it has not seen before, asks the model which matter, and appends those — one factual line each, with the link — to today's digest, news/<YYYY-MM-DD>.md. Input: feed URLs, in any form; the default world-news feeds when it names none, or when none of the named ones work. Result: how many items were new and how many were added.",
     source: `// News feeds into today's digest. Code fetches, parses and remembers what it
 // has seen; the model only picks what matters, in small batches.
 const DEFAULT_FEEDS = [
@@ -37,21 +37,31 @@ const SEEN = "news/seen.json";
 const BATCH = 15;
 
 export default async ({ task }) => {
-  const given = task.input.split(/\\s+/).filter((u) => /^https?:\\/\\//.test(u));
-  const feeds = given.length ? given : DEFAULT_FEEDS;
+  // URLs in any form: one per line, or joined with commas or semicolons.
+  const given = [...new Set(task.input.match(/https?:\\/\\/[^\\s,;<>"'()\\[\\]]+/g) ?? [])];
   fs.mkdirSync("news", { recursive: true });
   const seen = new Set(fs.existsSync(SEEN) ? JSON.parse(fs.readFileSync(SEEN, "utf8")) : []);
   const fresh = [];
   const failed = [];
-  for (const url of feeds) {
-    try {
-      for (const item of await five.web.feed(url)) {
-        if (!item.link || seen.has(item.link) || fresh.some((f) => f.link === item.link)) continue;
-        fresh.push({ ...item, source: new URL(url).hostname.replace(/^(www|feeds|rss)\\./, "") });
+  const read = async (urls) => {
+    for (const url of urls) {
+      try {
+        for (const item of await five.web.feed(url)) {
+          if (!item.link || seen.has(item.link) || fresh.some((f) => f.link === item.link)) continue;
+          fresh.push({ ...item, source: new URL(url).hostname.replace(/^(www|feeds|rss)\\./, "") });
+        }
+      } catch (err) {
+        failed.push(\`\${url}: \${err.message}\`);
       }
-    } catch (err) {
-      failed.push(\`\${url}: \${err.message}\`);
     }
+  };
+  let feeds = given.length ? given : DEFAULT_FEEDS;
+  await read(feeds);
+  // None of the named feeds worked: the defaults do.
+  const extra = DEFAULT_FEEDS.filter((u) => !given.includes(u));
+  if (given.length && failed.length === given.length && extra.length) {
+    feeds = [...given, ...extra];
+    await read(extra);
   }
   const failures = failed.length ? \` Failed: \${failed.join("; ")}\` : "";
   if (!fresh.length) return \`No new items in \${feeds.length} feeds.\${failures}\`;

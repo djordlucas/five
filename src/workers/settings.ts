@@ -103,11 +103,11 @@ export const FIELDS: SettingField[] = [
 export const DEFAULTS: Settings = {
   slots: 4,
   taskRuns: 4,
-  minOpenTasks: 2,
+  minOpenTasks: 4,
   leadEverySeconds: 600,
   taskTimeoutSeconds: 600,
   maxSteps: 12,
-  runTokens: 8000,
+  runTokens: 12_000,
   resultChars: 2000,
   imageSide: 1024,
   chatWaitSeconds: 300,

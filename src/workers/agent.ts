@@ -26,6 +26,13 @@ const MAX_RESULT_CHARS = 16_000;
 /** The share of the budget at which the agent is told to finish. */
 const FINISH_AT = 0.8;
 
+/** The line every system prompt starts with: small models otherwise guess the date. By the day, so it changes a slot's cached start once a day. */
+export function today(): string {
+  const now = new Date();
+  const day = now.toLocaleDateString("en-US", { weekday: "long", timeZone: "UTC" });
+  return `Today is ${day}, ${now.toISOString().slice(0, 10)} (UTC). Use this date; never guess another.`;
+}
+
 export interface AgentTool extends ToolDef {
   run(args: Record<string, unknown>, run: Run): Promise<string>;
 }
@@ -79,7 +86,7 @@ export async function runAgent(d: Deps, run: Run, o: AgentOptions): Promise<Agen
     const t0 = performance.now();
     const { completion, waitedMs } = await d.pool.complete(
       {
-        messages: [{ role: "system", content: o.system }, ...o.messages],
+        messages: [{ role: "system", content: `${today()}\n\n${o.system}` }, ...o.messages],
         ...(defs.length > 0 && { tools: defs }),
         signal: run.signal,
         log: stepLog,
@@ -198,7 +205,7 @@ function fit(d: Deps, run: Run, call: ToolCall, result: string): string {
     run.log.warn("result not kept", { error: err instanceof Error ? err.message : String(err) });
     return result.length > MAX_RESULT_CHARS ? `${result.slice(0, MAX_RESULT_CHARS)}\n… [cut]` : result;
   }
-  return `${result.slice(0, max)}\n… [${result.length - max} more characters: the whole result is in ${rel}; read_file reads it in parts]`;
+  return `${result.slice(0, max)}\n… [cut here; ${result.length - max} more characters are saved in ${rel}. To see more, read_file that path with from (a line number).]`;
 }
 
 export function isFailure(result: string): boolean {

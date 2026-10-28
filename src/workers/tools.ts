@@ -69,15 +69,32 @@ export function workspaceTools(d: Deps): AgentTool[] {
     },
     {
       name: "write_file",
-      description: "Write a text file in the workspace, replacing it if it exists; directories are made as needed.",
+      description:
+        "Write a new text file in the workspace; directories are made as needed. A file that exists is replaced only with replace: true — other workers' files may be there, so to add to a file use append_file.",
       parameters: {
         type: "object",
-        properties: { path: { type: "string" }, content: { type: "string" } },
+        properties: {
+          path: { type: "string" },
+          content: { type: "string" },
+          replace: {
+            type: "boolean",
+            description: "Replace the file if it exists: only your own file, rewritten whole.",
+          },
+        },
         required: ["path", "content"],
       },
       run: (a) =>
         guard(() => {
-          const e = ws().write(str(a.path), Buffer.from(str(a.content)));
+          const w = ws();
+          if (a.replace !== true) {
+            try {
+              const { entry } = w.read(str(a.path));
+              return `error: ${entry.path} exists (${entry.bytes} bytes) and was not replaced. Add to it with append_file, write to another path, or — if it is yours to rewrite whole — call write_file again with replace: true.`;
+            } catch (err) {
+              if (!(err instanceof WorkspaceError && err.status === 404)) throw err;
+            }
+          }
+          const e = w.write(str(a.path), Buffer.from(str(a.content)));
           return `wrote ${e.path} (${e.bytes} bytes)`;
         }),
     },

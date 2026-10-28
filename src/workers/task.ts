@@ -14,7 +14,7 @@
 import { awaitRun } from "../agent/builtins/index.ts";
 import type { HostModules } from "../runner/index.ts";
 import { type Bundled, bundleLibraries, importsLibraries } from "../tools/libs.ts";
-import { runAgent } from "./agent.ts";
+import { runAgent, today } from "./agent.ts";
 import { MAX_INPUT, MAX_TITLE } from "./board.ts";
 import { type Deps, type Run, runScope } from "./run.ts";
 import type { StoredWorker } from "./store.ts";
@@ -136,7 +136,7 @@ async function ask(d: Deps, run: Run, prompt: string, o: AskOptions): Promise<un
   const { completion, waitedMs } = await d.pool.complete(
     {
       messages: [
-        ...(o.system ? [{ role: "system" as const, content: o.system }] : []),
+        { role: "system" as const, content: o.system ? `${today()}\n\n${o.system}` : today() },
         { role: "user", content: prompt },
       ],
       signal: run.signal,

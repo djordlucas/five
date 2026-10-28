@@ -126,7 +126,9 @@ async function until(ok: () => boolean, what: string, ms = 10_000): Promise<void
   }
 }
 
-const system = (req: CompletionRequest) => (req.messages[0]?.role === "system" ? req.messages[0].content : "");
+/** A request's system prompt, after the date line every one starts with. */
+const system = (req: CompletionRequest) =>
+  req.messages[0]?.role === "system" ? String(req.messages[0].content).replace(/^Today is [^\n]*\n\n/, "") : "";
 const events = (five: Five): Event[] => five.state.eventsAfter(0, 10_000);
 
 async function serve(five: Five, cfg: ReturnType<typeof loadConfig>) {
@@ -870,4 +872,21 @@ test("the seed task workers are modules with a default export", async () => {
     const out = transformSync(w.source, { loader: "ts", format: "esm" }).code;
     assert.match(out, /as default\b|export default/, w.name);
   }
+});
+
+test("write_file does not replace a file unless asked to, and every agent is told today's date", async () => {
+  const { five, cfg, model } = make([
+    { calls: [["write_file", { path: "news/day.md", content: "theirs" }]] },
+    { calls: [["write_file", { path: "news/day.md", content: "mine" }]] },
+    { calls: [["write_file", { path: "news/day.md", content: "mine", replace: true }]] },
+    { content: "ok" },
+  ]);
+  await agent(five);
+  const results = events(five).flatMap((e) => (e.type === "tool" ? [e.result] : []));
+  assert.match(results[0] ?? "", /^wrote news\/day\.md/);
+  assert.match(results[1] ?? "", /^error: news\/day\.md exists .*append_file/);
+  assert.match(results[2] ?? "", /^wrote news\/day\.md/);
+  assert.equal(fs.readFileSync(path.join(cfg.workspace, "news/day.md"), "utf8"), "mine");
+  const first = model.requests[0]?.[0];
+  assert.match(String(first?.content), /^Today is \w+day, \d{4}-\d\d-\d\d \(UTC\)\.[^\n]*\n\nYou are a test\./);
 });

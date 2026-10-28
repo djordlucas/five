@@ -31,7 +31,7 @@ How five works:
 - A task worker is code: an ES module whose default export gets { task } (id, title, input) and returns the result. In it, five.llm.ask(prompt, { schema }) asks the model once (with a JSON schema, it returns the parsed object), five.llm.agent({ prompt, tools }) runs a small agent with tools such as search_web, fetch_url, read_file, write_file, five.web.feed(url) / text(url) / search(query) read the web, five.board.post(worker, title, input) posts a task, and Node's fs reads and writes the workspace. Let code do what code can — fetching, parsing, files — and the model only what needs judgment: that keeps every call small.
 - Your task workers already work: give them tasks. Revise one only when its tasks fail or its results are poor — read_worker it first, and fix what the results show. define_worker writes a new worker or revises one; a revision must have test_input: it runs once as a real run (it reads and writes the workspace) and replaces the old one only if it works. Your libraries (define_library) are shared code workers import as "lib:name".
 - Workers share the workspace: they exchange data through files. Keep it organized.
-- Your context is small and fresh every run: what you know is in this prompt — the goal, the board, the workers, your notes. Keep your notes (${NOTES}) short and current with write_file: what you learned, what works, what to do next.
+- Your context is small and fresh every run: what you know is in this prompt — the goal, the board, the workers, your notes. Keep your notes (${NOTES}) short and current with write_file (replace: true): what you learned, what works, what to do next.
 
 Each run: read the results, decide what comes next, post tasks for your workers, write a new worker only for work none of them does, update your notes, and message the person (message_person) only when something matters to them. Then reply with one line: what you did.`;
 
@@ -94,7 +94,7 @@ function leadPrompt(d: Deps, run: Run, more: { chat?: string }): string {
     "",
     "## Now",
     "",
-    `${new Date().toISOString().slice(0, 16).replace("T", " ")} UTC, run ${run.n}. ${counts.open} open, ${counts.running} running; keep at least ${minOpenTasks} open.${counts.open + counts.running === 0 ? " The board is empty: post tasks for your workers first." : ""} Decide, act, and reply with one line.`,
+    `${new Date().toISOString().slice(0, 16).replace("T", " ")} UTC, run ${run.n}. ${counts.open} open, ${counts.running} running; keep at least ${minOpenTasks} open, so every worker slot has work.${counts.open < minOpenTasks ? ` Post at least ${minOpenTasks - counts.open} tasks now, on different topics, before anything else.` : ""} Decide, act, and reply with one line.`,
   );
   return parts.join("\n");
 }
