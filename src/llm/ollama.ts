@@ -19,6 +19,8 @@ export interface OllamaOptions {
 }
 
 export const OLLAMA_ENDPOINT = "http://localhost:11434";
+/** Tries of a call whose connection fails. */
+const ATTEMPTS = 2;
 
 type OllamaMessage =
   | { role: "system" | "user" | "assistant"; content: string; tool_calls?: OllamaToolCall[]; images?: string[] }
@@ -91,25 +93,31 @@ export class Ollama implements ChatModel {
       last_message: preview(messages.at(-1)?.content ?? null),
     });
 
-    const started = performance.now();
-    let res: Response;
-    try {
-      res = await fetch(`${this.opts.endpoint}/api/chat`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body,
-        signal,
-      });
-    } catch (err) {
-      if (signal?.aborted) log.debug("model call aborted", { attempt: 1 });
-      else log.error("model call failed", { attempt: 1, error: err });
-      throw err;
+    let started = performance.now();
+    let res: Response | undefined;
+    let attempt = 1;
+    // A connection that fails — Ollama stalled until fetch gave up, or restarted — is tried once more.
+    for (; !res; attempt++) {
+      started = performance.now();
+      try {
+        res = await fetch(`${this.opts.endpoint}/api/chat`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body,
+          signal,
+        });
+      } catch (err) {
+        if (signal?.aborted) log.debug("model call aborted", { attempt });
+        else log.error("model call failed", { attempt, error: err });
+        if (signal?.aborted || attempt >= ATTEMPTS) throw err;
+      }
     }
+    attempt--;
     const ms = Math.round(performance.now() - started);
 
     if (!res.ok) {
       const text = await res.text();
-      log.error("model call failed", { status: res.status, attempt: 1, duration_ms: ms, body: preview(text) });
+      log.error("model call failed", { status: res.status, attempt, duration_ms: ms, body: preview(text) });
       throw new Error(`ollama: ${res.status} ${res.statusText}: ${text.slice(0, 500)}`);
     }
 
@@ -117,7 +125,7 @@ export class Ollama implements ChatModel {
     log.info("model replied", {
       model: this.opts.model,
       duration_ms: ms,
-      attempt: 1,
+      attempt,
       finish_reason: out.finishReason,
       ...(think && { think }),
       tool_calls: out.message.tool_calls?.map((c) => c.function.name),

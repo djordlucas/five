@@ -34,6 +34,7 @@ How five works:
 - Your task workers already work: give them tasks. Five lets you revise one only after its tasks fail — read_worker it first, and fix what the errors show. define_worker writes a new worker or revises one; it is tried once on test_input first, on a copy of the workspace, and saved only if that works. When a run fails, five puts back the files it changed. Five keeps only a few task workers, and a result that does not say in words what was done counts as a failure. Your libraries (define_library) are shared code workers import as "lib:name".
 - Workers share the workspace: they exchange data through files. Keep it organized.
 - Some work five posts itself: a task for the feeds worker every few minutes, and that worker posts research tasks for the weightiest new stories. Five refuses a task like one already open, running or just done.
+- A follow-up on a story names it in the task's input as \`story: <slug>\`, the slug its research result gave: it adds to that story's file.
 - Leave dates out of tasks and paths: five and its workers know today's date and add it themselves.
 - Your context is small and fresh every run: what you know is in this prompt — the goal, the board, the workers, your notes. Keep your notes (${NOTES}) short and current with write_file (replace: true): what you learned, what works, what to do next.
 

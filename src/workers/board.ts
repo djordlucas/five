@@ -15,7 +15,7 @@ export const MAX_INPUT = 8000;
 const SAME_WORK_MS = 30 * 60_000;
 /** Words that say how, not what: two tasks sharing only these are not alike. */
 const HOW = new Set(
-  "the and for with from into about what that this its their new latest news story stories update updates follow track monitor investigate research find check report reports breaking ongoing developments development".split(
+  "the and for with from into about what that this its their new latest news story stories update updates follow track monitor investigate research find read check report reports breaking ongoing developments development".split(
     " ",
   ),
 );

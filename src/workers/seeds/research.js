@@ -52,7 +52,7 @@ export default async ({ task }) => {
   let title;
   if (!slug) {
     const pick = await five.llm.ask(
-      `Task: ${task.title}\n${task.input}\n\nStories followed so far: ${stories.join(", ") || "none"}.\n\nWhich story is this task about? Give an existing slug when it is about that story; otherwise a new one — a few lowercase words naming the event, such as spain-train-crash, never a news outlet or a date — and its title, naming the event too.`,
+      `Task: ${task.title}\n${task.input}\n\nStories followed so far: ${stories.join(", ") || "none"}.\n\nWhich story is this task about? Give an existing slug when it is about that story; otherwise a new one — three to six lowercase words naming the event, such as spain-train-crash-adamuz, never a single word, a news outlet or a date — and its title, naming the event too.`,
       {
         schema: {
           type: "object",
@@ -79,7 +79,10 @@ export default async ({ task }) => {
       const shared = theirs.filter((w) => words.has(w)).length;
       return shared >= 2 && shared / Math.min(words.size, theirs.length) >= 0.6;
     });
-    if (like) slug = like;
+    // A slug too short to name an event — "ukraine" — is the one story it is part of, if only one.
+    const within = stories.filter((s) => [...words].every((w) => s.split("-").includes(w)));
+    if (!like && words.size <= 2 && within.length === 1) slug = within[0];
+    else if (like) slug = like;
   }
   const file = `${STORIES}/${slug}.md`;
   const before = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
