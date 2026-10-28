@@ -1,33 +1,47 @@
 # five
 
-An experimental self-modifying agent: one agent, in a loop that never stops,
-that reads and rewrites its own context — system prompt included — and builds
-its own tools. Line seven/nine's sibling, and the most minimal of them: one
-agent, one context, one SQLite file, Ollama.
+An experimental self-modifying agent that never stops — now as a team of small
+models rather than one bigger one. A main loop in code runs the workers: a
+**lead** that plans, a **chat** that talks with the person, and **task
+workers** — code the lead writes — that do one task each, several at once, on
+one small model served by Ollama. Line seven/nine's sibling, and the most
+minimal of them: one process, one SQLite file, Ollama.
 
-![Architecture of five: the web UI and Ollama outside; in the container, the five process — HTTP API, supervisor loop, context, state, runner and tools — its child processes and the workspace](docs/architecture.png)
+![Architecture of five, as one agent: drawn before the workers, to be redrawn](docs/architecture.png)
 
-`docs/architecture.svg` is the source; `docs/architecture.png` is it rendered at 2×.
+`docs/architecture.svg` is the source; `docs/architecture.png` is it rendered at
+2×. It shows five before the workers: one agent and its context.
 
 ## How it works
 
 | Part | What it does |
 |---|---|
-| The loop | Each turn appends the **next prompt** to the context as a user message and sends the whole context to the model. The model makes as many tool calls as it likes (up to `FIVE_MAX_STEPS` model calls); the turn ends when it calls `end_turn` or replies without a call. A turn that ends with a reply is folded into it, as `end_turn` folds one into its summary, if it did work; if it did none, it leaves nothing in the context (`FIVE_FOLD_REPLIES`). The next turn starts with the prompt the agent set with `end_turn` or `set_next_prompt`, or the same one again. |
-| The context | The system prompt, every message of every turn, and the next prompt. All of it is the agent's to change; the seed calls it the agent's working memory. Messages pile up until the agent deletes them, and Ollama silently drops the oldest text when the window (`FIVE_CONTEXT_TOKENS`) is full. |
-| Self block | Sent after the messages with every model call — last, so that Ollama reuses its work on the unchanged system prompt and messages — rebuilt each time and not part of the context the agent edits (nine's self-model, made small): who it is, the turn and step, its goal's first line, how full its working memory is, its note and tool counts, its inbox, and its own self note, `memory/self.md` (at most 1500 characters). The Workspace page's Context tab shows it. |
-| Inbox | `message_person(subject, text)` puts a message, with a subject of at most 120 characters, in the person's inbox, at most once a turn, and returns at once: the loop never waits. What the person writes back on the Inbox page is put before the prompt of the next turn. `read_inbox(last?)` shows the inbox both ways, oldest first, and reads a message the person sent during the turn, so it is not put before the next prompt again; the self block says when one is unread. |
-| Chat | For when the person wants to talk now. Their chat message joins the turn at its next step (a turn between turns starts at once; a paused loop runs one turn for it), marked as live, and the self block says a chat is open. The agent's replies without a tool call go to the person, and instead of ending the turn, the turn waits for their next message — `chatWaitSeconds` (Config, 300 by default) — calling tools when an answer needs them, or to change course as asked. When the person leaves, or does not answer in time, the turn carries on with its work; a paused loop's turn ends there. Steps in a chat do not count against the turn's limit, a turn with a chat is never dropped as idle, and its fold keeps what both said. |
-| Supervisor | `src/agent/supervisor.ts`: every way five steps into the loop — the guards, folding turns, the self block, the limits on the agent's tools — with one set of settings, tunable on the Config page while the loop runs. A change applies from the next time it is checked (most at the next turn) and is kept in the state; the environment variables below give the defaults. |
-| Guards | Five keeps out of the context but for these. When the last model call used more than `FIVE_CONTEXT_WARN` percent of the window, the turn's prompt starts with a warning to save to memory and delete messages, naming the one `delete_messages` call that drops every earlier turn. Above `FIVE_CONTEXT_TRIM` percent, the model can no longer make that call, so five drops the oldest messages itself, down to about half the window, and the turn's prompt says so. A turn that does no work — no tool call beyond `read_context`, `memory_read`, `message_person`, `set_next_prompt`, `end_turn` and writing the self note — makes the next prompt start with a note to get back to work, or to set a new goal if the old one is done; `FIVE_IDLE_TURNS` such turns in a row pause the loop. When `staleTurns` turns in a row (3) start with the same prompt, the next one's prompt starts with a note that it may ask for work already done. `set_next_prompt` and `end_turn` refuse a next prompt that repeats the turn's own, opens by reporting what is done ("Turn 22 complete…"), or waits for a user ("Awaiting user request…", "standby"): no one answers a prompt, and `message_person` is the way to ask. |
-| Context tools | `read_context`, `set_system_prompt`, `edit_system_prompt`, `edit_message`, `insert_message`, `delete_messages`, `set_next_prompt`, `end_turn`, `message_person` and `read_inbox`. A change applies from the next model call. `end_turn(summary, next)` keeps the context in one call: the summary replaces every message of the turn, and `next` sets the next prompt. |
-| Memory | `memory_write` and `memory_read`: notes the agent saves as `<workspace>/memory/<name>.md` and reads back in later turns — what outlives the context. The seed teaches it to start each turn with `memory_read` and save results as it goes. |
-| seven's tools | `run_js`, `define_tool`, `read_tool`, `delete_tool`, `tool_health`, `disable_tool`, `enable_tool`, `start_tool`, `run_status`, `wait_run`, `kill_run`, `list_runs`, `sql` — and every tool the agent builds. A result of a run longer than `FIVE_RESULT_CHARS` is kept whole in `<workspace>/results/`, and the context gets its start and the file's path. Each run is its own Node.js child process with all of Node and npm, and **no permission model**. In a run, `five.llm.chat`, `five.db` and `five.tools.<name>` reach back into five. |
-| Images and PDFs | `view_image(path)` shrinks a workspace image to fit the Config setting "Images shrunk to" (1024 px a side by default), keeps it as a JPEG in `results/images/`, and shows it to the model — qwen3.5 sees — in a user message after the step's results; the call sends its bytes, the context keeps only its path, and `end_turn`'s summary drops it with the turn. `read_pdf(path, first?, last?)` gives a PDF's text page by page (pdf.js, through `unpdf`); a page without text, a scan or a drawing, is rendered as a PNG in `results/images/` for `view_image`. The Workspace shows images and PDFs; the Context tab and Activity show the images the model was shown. |
-| Libraries | Code the agent's tools share. `define_library(name, description, code, deps?, test_code?)` saves a module with revisions; a tool or `run_js` imports it as `import { f } from "lib:name"`. A library is bundled (esbuild) into a tool when the tool is defined, so the tool keeps that revision until `rebuild_tool(name, test_args?)` builds it on the current one: changing a library never changes a tool by itself. Each tool records the libraries it was built on and their revisions — the tags: `define_library` answers with the tools left on an older revision, `read_tool` and `read_library` show both sides, `delete_library` is refused while anything uses the library, and `test_code` tries a new revision before it is saved. The Workspace has a Libraries tab, and a tool's page lists its libraries, current or behind. |
-| The seed | A new or reset context starts from `src/agent/prompt.ts`: a system prompt that says who the agent is (five, a program that runs on its own, not an assistant in a chat), a goal (follow world news from RSS feeds and web search, into daily digests and story files), its context as working memory and its notes as long-term memory, its self note, the person and the inbox, an end-of-turn routine (save to memory, write lessons, maybe message the person, `end_turn` with a summary and the next prompt), and empty `## State` and `## Lessons` sections. Edit it there, or edit the live system prompt in the UI. |
-| The model | Ollama, `qwen3.5:9b` by default. Tool calls a small model writes as text are recovered. `FIVE_THINK=on` lets a thinking model think; the UI shows its thinking. |
-| State | `<workspace>/.five/five.db`: the context, the event log, the inbox, built tools, background runs, and whether the loop was running. A restart resumes the context, and resumes the loop if it was running; a turn cut off by the restart ends as `stopped`. |
+| The main loop | `src/workers/scheduler.ts`, code and no model. Once a second, and whenever a run ends, it starts what there is room for: the lead when the board has fewer open tasks than `minOpenTasks` (at most every 30 s), when `leadEverySeconds` have passed, or soon after a chat, a goal change or an inbox message; then a task worker for each open task, oldest first, up to `taskRuns` at once. Paused, it starts neither; Stop also ends the lead and task runs in progress. The chat runs either way. |
+| Runs | One worker at work: the lead planning, the chat talking, a task worker on one task. Runs are numbered across restarts; every event carries its run's number. A task whose run is cut off by a restart goes back on the board. |
+| Model slots | Every model call goes through `src/workers/pool.ts`, which sends at most `slots` at once (match Ollama's `OLLAMA_NUM_PARALLEL`) and queues the rest — the chat's first. On a 16 GB M4, `qwen3.5:4b` keeps about 25 tokens/s per call with 4 at once, but a context not yet in a slot is read one at a time, at about 340 tokens/s for the whole machine: which is why contexts are kept small. |
+| Contexts | An agent — the lead, the chat's answer, a task worker's `llm.agent` — starts from a context five builds, only grows by appending (so each call finds the earlier part already in its slot and reads only what is new), and is dropped when the agent is done. What lasts is in the workspace and on the board. Each agent gets only the tools it needs. Near `runTokens` (8000 by default) five tells it to finish; past it, it ends. A long tool result is kept whole in `results/`, and the agent gets its start and the path. |
+| The board | Tasks: a worker's name, a title, an input, and when done a short result naming the files where the work is. The lead posts them, as can the chat, a task worker (`five.board.post`) and the person (Board page). |
+| The lead | Fixed, five's own (`src/workers/lead.ts`). Each run's prompt is built fresh: the goal, the board (open, running, the latest results), the task workers with their counts, its notes (`memory/lead.md`), the person's unread inbox messages and the latest chat. It posts and cancels tasks, writes task workers, sets the goal, keeps its notes and messages the person (one a run); its own tools are the board's, the workers', the files', `define_library`, `read_library` and `run_js`. |
+| Task workers | Code the lead writes with `define_worker`: an ES module whose default export gets `{ task }` and returns the result, run in a child process of its own. It reaches five through `five.llm.ask(prompt, { system, schema })` — one model call, its reply parsed when a JSON schema constrains it — `five.llm.agent({ prompt, tools, maxSteps })`, `five.web.text / feed / search`, and `five.board.post`; Node's `fs` works in the workspace. Code does what code can, the model what needs judgment. A revision of a worker must pass a trial run (`test_input`) before it replaces the one that works. The lead and the chat cannot be replaced. Libraries (`lib:name`) are bundled in, as for a tool. |
+| Seeds | A new five starts with two task workers, the lead's to revise like its own: `research` (a small agent with search, pages and files) and `feeds` (news feeds into today's digest: code fetches, parses and remembers what it has seen; the model picks what matters, in batches of 15, with a schema). And a goal: a news desk that never closes. |
+| The chat | Fixed (`src/workers/chat.ts`). The person's first message opens a chat run with a snapshot of five — the goal, what runs, the board — and its messages are kept while the chat is open. It answers from the files, the board and the web, and changes course when asked (`set_goal`, `post_task`). After an answer it waits `chatWaitSeconds` for the person; then, or when they leave, its transcript goes to `chats/` and the lead reads it at its next run. |
+| Inbox | The lead's messages to the person (`message_person`, with a subject), and the person's to five, which the lead reads at its next run — soon after. |
+| Settings | `src/workers/settings.ts`: slots, task runs, when the lead runs, steps and context budget of an agent, result size, image size, chat wait. Changed live on the Config page, kept in the state; the environment gives the defaults. |
+| seven's tools | `run_js`, `define_tool`, `start_tool` and the rest, and the tools the agents build, are there for any agent given them by name; `view_image` and `read_pdf` too. Five adds small tools of its own: `read_file`, `write_file`, `append_file`, `list_files`, `fetch_url` (a page as text, a feed as its items) and `search_web` (DuckDuckGo). |
+| The model | Ollama, `qwen3.5:4b` by default, 16k tokens a slot. Tool calls a small model writes as text are recovered. |
+| State | `<workspace>/.five/five.db`: the event log, the board, the task workers, the goal, the settings, the inbox, tools, libraries, background runs, and whether five was running. |
+
+## Ollama with several slots
+
+Ollama serves several calls at once from one loaded model when
+`OLLAMA_NUM_PARALLEL` is set; each slot gets its own context window. The macOS
+app does not pass that variable to its server, so run the server yourself:
+
+```sh
+OLLAMA_NUM_PARALLEL=4 OLLAMA_HOST=0.0.0.0 OLLAMA_KEEP_ALIVE=30m ollama serve
+```
+
+With one slot five still works: the calls wait their turn in Ollama.
 
 ## Web UI
 
@@ -35,24 +49,14 @@ Preact, with seven's and nine's design tokens, polling the API once a second.
 A top bar with the sections; each page's contents in one centered column; on a
 phone, a bottom tab bar.
 
-![Activity: the turn's prompt, each step with its tool calls and their timestamps, and the step in progress streaming the model's reply](docs/screenshots/activity.png)
-
 | Page | Shows |
 |---|---|
-| Activity | The loop as it runs, and the chat with five: a box pinned to the bottom sends a message that joins the turn at its next step; your messages and five's answers show as bubbles in the timeline, with how long five still waits for you, and **Leave chat** ends it. While a step runs, a pulsing row at the end of its turn says what it is doing — working, thinking, writing, or running a tool — for how long, with the model's thinking and reply as they stream in. A top bar with Start / Pause / Step / Stop turn, and ‹ last N turns › to choose how many turns show (kept in the browser); a gauge of how full the context window is, which opens the Context tab; model, turn and step; every turn live — its prompt, each model step (thinking, reply, tool calls with arguments and results), context changes, how it ended and the next prompt. |
-| Workspace | Four tabs. **Files**: the workspace's files, to read and edit (after nine's Data section): a directory as a grid of cards, searched by name, filtered to folders, files or databases, sorted by name, date or size; a file opens across the whole width. A text file up to 2 MB opens in an editor (⌘S saves); any file downloads; New file takes a path such as `notes/today.md`; Upload puts files in the directory shown; Delete removes a file, or a directory once empty. A SQLite database opens its tables: rows 100 at a time, Add row, Edit to change or delete one by rowid, and a SQL view that runs one statement. A file the agent changed since you opened it is not overwritten. `.five/` is not reachable. **Context**: the next prompt, the system prompt, the self block (read-only) and every message, each editable, and messages deletable, while the loop is paused and no turn runs. **Start over** resets to the seed; its checkbox (on by default) also deletes the built tools and the workspace files. **Tools**: the tools the agent built, as a grid like Files (with the libraries each is built on, and a badge when one is behind) — searched by name and description, filtered to enabled or disabled, sorted by name, last change or revisions — each opening to its libraries, parameters and source. **Libraries**: the same grid for libraries — in use or unused, and how many tools are behind — each opening to the tools built on it and at which revision, the libraries that import it, and its source. |
-| Inbox | The agent's messages and yours, newest first, with a box to write to it (⌘↩ sends). A message you send is read before the next turn; **Send as next prompt** makes it that turn's prompt instead, in place of the one the agent set; the nav shows a dot while the agent has written something you have not seen. |
-| Config | The supervisor's settings: every one, grouped — working memory, turn endings, idle turns, next prompt, self and inbox, results, chat — each with what it does and its default; Apply changes them while the loop runs, Reset puts them all back. Also what it counts now: idle turns in a row, and turns with an unchanged next prompt. |
-| Monitor | What five has running; more will come here. For now its processes: every child process since five started — each `run_js`, each call of a tool the agent built (from a turn or from inside another run), each `define_tool` trial, each background run — newest first, with its turn and step, state and duration. One shows its error or result, its output (followed live), its arguments and its code; a live one can be killed. Kept in memory, the last 200 finished. |
-
-| | |
-|---|---|
-| ![Workspace, Files: the workspace as a grid of cards, with search, filters and sort](docs/screenshots/files.png) **Workspace · Files** | ![Workspace, Context: the next prompt, the system prompt and the self block, editable while paused](docs/screenshots/context.png) **Workspace · Context** |
-| ![Workspace, Tools: the agent's tools as cards, with the libraries each is built on and a badge when one is behind](docs/screenshots/tools.png) **Workspace · Tools** | ![A library: the tools built on it, at which revision, current or behind, and its source](docs/screenshots/library.png) **Workspace · Libraries** |
-| ![Inbox: a box to write to five, with Send and Send as next prompt, and the messages](docs/screenshots/inbox.png) **Inbox** | ![Config: the supervisor's settings, grouped, with what each does](docs/screenshots/config.png) **Config** |
-| ![Monitor: every child process, one open with its error, output and code](docs/screenshots/monitor.png) **Monitor** | ![Activity on a phone: the top bar, the controls, the steps and the live row, with the bottom tab bar](docs/screenshots/activity-phone.png) **On a phone** |
-
-Tools and Libraries show sample tools and libraries, made with the built-ins in a scratch workspace; the rest is a live run.
+| Activity | Five at work. A top bar: what runs, the model's slots as squares (filled while a call runs) and how many calls wait, the board's counts, a filter (all runs, the lead's, tasks, the chat), ‹ last N runs ›, Start / Pause / Stop runs, and the goal. Then every run where it began, newest at the bottom: its worker, task, calls, how it ended. A running run is open, with a pulsing row saying what it does — waiting for a slot, writing, running a tool or its own code — and the model's reply as it streams; a finished one folds to its result, and opens to its prompt, each call with its tool calls and results, and what `llm.ask` asked. Board, goal, worker and inbox events show as lines. At the bottom, the chat: Enter sends, your messages and five's answers show as bubbles, with how long five still waits for you, and **Leave chat** ends it. |
+| Board | Every task, newest first: status, worker, title, who posted it, how long it took, and its result or error; opened, its input and whole result. Search, filters by status and worker, **Post a task** for a task worker (its description shown), and Cancel on an open one. |
+| Workspace | Four tabs. **Files**: the workspace's files to read and edit, as a grid of cards, searched, filtered and sorted; a SQLite database opens its tables, rows and a SQL view; images and PDFs show. **Workers**: the lead and the chat (five's own, opening to their instructions) and the task workers (revision, tasks done and failed, opening to their code and libraries). **Tools** and **Libraries**: what the agents built, as grids, each opening to its source. |
+| Inbox | The lead's messages and yours, newest first, with a box to write to five (⌘↩ sends): the lead reads it at its next run. The nav shows a dot while five has written something you have not seen. |
+| Config | The goal, to read and change, and the settings, grouped — model, workers, runs, chat — each with what it does and its default; Apply changes them while five runs, Reset puts them all back. |
+| Monitor | Every child process since five started — each `run_js`, tool call, `define_tool` trial, background run and task worker — newest first, with its run and call, state and duration. One shows its error or result, its output (followed live), its arguments and its code; a live one can be killed. |
 
 ## Running
 
@@ -63,24 +67,22 @@ Tools and Libraries show sample tools and libraries, made with the built-ins in 
 | Working on the UI, beside either | `make ui-host`: the UI from source, reloading as you edit; its API calls go to five on :5555 | `http://<host>:5173` |
 
 Under Docker all data lives in `./workspace`. Configuration is environment
-only, but for the supervisor's settings, which the variables marked *supervisor*
-only give defaults to; `.env.example` lists every variable:
+only, but for the settings, which the variables marked *setting* only give
+defaults to; `.env.example` lists every variable:
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `FIVE_OLLAMA_MODEL` | `qwen3.5:9b` | a pulled model with the tools capability |
+| `FIVE_OLLAMA_MODEL` | `qwen3.5:4b` | a pulled model with the tools capability |
 | `FIVE_OLLAMA_ENDPOINT` | `http://localhost:11434` (Docker: `host.docker.internal`) | Ollama |
-| `FIVE_CONTEXT_TOKENS` | `32768` | the window Ollama loads the model with |
+| `FIVE_CONTEXT_TOKENS` | `16384` | the window of each of the model's slots |
 | `FIVE_THINK` | `off` | let a thinking model think |
-| `FIVE_MAX_STEPS` | `30` | model calls per turn |
-| `FIVE_TURN_DELAY_MS` | `1000` | pause between turns |
-| `FIVE_AUTOSTART` | `off` | start looping at startup even if it was paused |
-| `FIVE_CONTEXT_WARN` | `60` | *supervisor:* percent of the window above which a turn's prompt starts with a warning; `0` off |
-| `FIVE_FOLD_REPLIES` | `on` | *supervisor:* fold a turn that ends with a reply into that reply if it did work, drop it if not |
-| `FIVE_CONTEXT_TRIM` | `85` | *supervisor:* percent of the window above which five drops the oldest messages before a turn; `0` off |
-| `FIVE_IDLE_TURNS` | `3` | *supervisor:* turns in a row that do no work that pause the loop; `0` turns the guard and its note off |
-| `FIVE_RESULT_CHARS` | `3000` | *supervisor:* a run's result longer than this goes to a file, its start to the context; `0` never |
-| `FIVE_RUN_TIMEOUT_MS`, `FIVE_RUN_MEMORY_MB` | `60000`, `1024` | limits of one code run |
+| `FIVE_SLOTS` | `4` | *setting:* model calls at once; match `OLLAMA_NUM_PARALLEL` |
+| `FIVE_TASK_RUNS` | `4` | *setting:* task runs at once |
+| `FIVE_MAX_STEPS` | `12` | *setting:* model calls in one agent |
+| `FIVE_RUN_TOKENS` | `8000` | *setting:* the context budget of one agent |
+| `FIVE_TICK_MS` | `1000` | how often five looks for work |
+| `FIVE_AUTOSTART` | `off` | start the workers at startup even if five was paused |
+| `FIVE_RUN_TIMEOUT_MS`, `FIVE_RUN_MEMORY_MB` | `60000`, `1024` | limits of one code run (a task worker's: the `taskTimeoutSeconds` setting) |
 | `FIVE_API_ADDR` | `127.0.0.1:5555` (Docker: `0.0.0.0:5555`) | where the API and UI listen |
 | `FIVE_PUBLISH` | `0.0.0.0` | Docker: host interface port 5555 is published on |
 | `FIVE_WORKSPACE` | current directory (Docker: `/workspace`) | where everything lives |
@@ -92,18 +94,19 @@ JSON over HTTP; writes need `content-type: application/json`.
 
 | Method | Path | Does |
 |---|---|---|
-| GET | `/api/v1/status` | model, limits, loop state (with `live`: the step in progress, its phase, start, and the model's thinking and reply so far), token use, message and tool counts, last event seq, the id of five's latest inbox message |
-| POST | `/api/v1/loop/start`, `/pause`, `/stop`, `/step` | control the loop; `stop` also ends the turn; `step` runs one turn while paused |
-| GET | `/api/v1/context` | system prompt, self block, next prompt, turn, messages |
-| GET, PUT, DELETE | `/api/v1/supervisor` | the supervisor's settings, their defaults, which changed, each field's label, help and bounds, and its counts; change some `{key: value}` (all or none: a bad one is a `400`); back to the defaults |
-| GET, POST | `/api/v1/inbox` | the inbox, newest first; send five `{text}` (at most 4000 characters), read before the next turn — with `"asPrompt": true`, as the next turn's prompt |
-| PUT | `/api/v1/context/system`, `/api/v1/context/next` | `{text}` |
-| PUT, DELETE | `/api/v1/context/messages/:i` | edit `{content}`, or delete |
-| POST | `/api/v1/chat`, `/api/v1/chat/leave` | chat with five `{text}`: the message joins the turn at its next step (a paused loop runs one turn for it); the agent's replies without a tool call answer, and the turn waits for the next message (the `chatWaitSeconds` setting). `leave` ends the chat: the turn carries on, or ends while paused. `status.loop.chat` shows it |
-| POST | `/api/v1/context/reset` | seed context, turn 0, events and inbox cleared; `{"clean": true}` also deletes built tools and workspace files |
-| GET | `/api/v1/events?after=<seq>` · `?turns=<n>` | the event log: after a seq, or the last n turns |
-| GET | `/api/v1/turns/:n` | one turn's events |
-| GET | `/api/v1/tools`, `/api/v1/tools/:name` | built tools, each with the libraries it was built on (`libs`: revision, and the library's `current`) |
+| GET | `/api/v1/status` | model, slots and calls waiting, whether five runs, the runs in progress (each with its worker, task, calls, context size and `live`: what it does now, and the model's reply so far), the chat, the board's counts, the goal, counts of tools, libraries and workers, the last event seq, five's latest inbox message |
+| POST | `/api/v1/loop/start`, `/pause`, `/stop` | start or pause the lead and task runs; `stop` also ends those in progress (the chat goes on) |
+| GET, PUT | `/api/v1/goal` | the goal; set it `{goal}` |
+| GET, POST | `/api/v1/board` | tasks, newest first (`?status=&limit=`), with the counts; post one `{worker, title, input?}` |
+| GET, DELETE | `/api/v1/board/:id` | one task; cancel an open one (`409` otherwise) |
+| GET | `/api/v1/workers`, `/api/v1/workers/:name` | the workers — lead and chat (fixed), task workers (revision, libraries, tasks done and failed); one with its code, or a fixed one's instructions |
+| GET, PUT, DELETE | `/api/v1/settings` | the settings, their defaults, which changed, each field's label, help and bounds; change some `{key: value}` (all or none: a bad one is a `400`); back to the defaults |
+| GET, POST | `/api/v1/inbox` | the inbox, newest first; send five `{text}` (at most 4000 characters): the lead reads it next |
+| POST | `/api/v1/chat`, `/api/v1/chat/leave` | say `{text}` in the chat, opening it if needed; leave it (`409` when none is open). `status.chat` shows it |
+| POST | `/api/v1/reset` | start over: no events, tasks, inbox, or task workers but the seeds, and the first goal; `{"clean": true}` also deletes the tools, libraries and workspace files. `409` while runs are in progress |
+| GET | `/api/v1/events?after=<seq>` · `?runs=<n>` | the event log: after a seq, or the last n runs (with the events of no run since) |
+| GET | `/api/v1/runs/:n` | one run's events |
+| GET | `/api/v1/tools`, `/api/v1/tools/:name` | the tools the agents built, each with the libraries it was built on (`libs`: revision, and the library's `current`) |
 | GET | `/api/v1/libraries`, `/api/v1/libraries/:name` | libraries, the tools built on each and at which revision; one with its source, npm ranges and the libraries that import it |
 | GET | `/api/v1/processes`, `/api/v1/processes/:id` | the child processes since five started, newest first; one with its code, arguments, output (the last 2000 lines) and result |
 | POST | `/api/v1/processes/:id/kill` | kill a live one, and anything it spawned |
@@ -113,22 +116,23 @@ JSON over HTTP; writes need `content-type: application/json`.
 | GET, POST, PUT, DELETE | `/api/v1/workspace/db/rows?path=` | a page of a table's rows (`&table=&offset=&limit=`, at most 500); insert `{table, values}`; change `{table, rowid, values}`; delete `&table=&rowid=` |
 | POST | `/api/v1/workspace/db/sql?path=` | `{sql, args?}`: one statement; a read returns up to 1000 rows, a write `changes` and `lastInsertRowid`. `ATTACH` and `VACUUM INTO` are refused |
 
-Context changes are refused (409) during a turn. Workspace paths are relative to the workspace; `..`, a link out of it, and `.five/` are refused.
+
+Workspace paths are relative to the workspace; `..`, a link out of it, and `.five/` are refused.
 
 ## Layout
 
 | Path | Holds |
 |---|---|
-| `src/agent/loop.ts` | the loop: turns, model calls, tool calls, events, the inbox |
-| `src/agent/supervisor.ts` | the supervisor: guards, folding, the self block, tool limits, and their settings |
-| `src/agent/processes.ts` | the record of every child process, around seven's runner |
-| `src/agent/context.ts` | the context tools |
-| `src/agent/media.ts` | `view_image` and `read_pdf` |
-| `src/tools/libs.ts`, `src/agent/builtins/libs.ts` | libraries: the store and bundling, and their built-ins |
-| `src/agent/prompt.ts` | the seed system prompt and first prompt |
-| `src/agent/builtins/`, `src/runner/`, `src/tools/` | seven's tools, runner and tool store, copied |
+| `src/workers/scheduler.ts` | the main loop: starting runs, following them to their end, the chat, status |
+| `src/workers/agent.ts` | an agent: model calls through the slots, tool calls, the context budget |
+| `src/workers/lead.ts`, `chat.ts`, `task.ts` | the lead, the chat, and running a task worker with its host functions |
+| `src/workers/board.ts`, `store.ts`, `seeds.ts` | the board, the task workers' store, the seed workers and goal |
+| `src/workers/pool.ts`, `settings.ts`, `run.ts` | the model's slots, the live settings, a run and what runs share |
+| `src/workers/tools.ts`, `web.ts` | the tools agents get, and the web as text, feeds and search |
+| `src/agent/` | seven's built-ins, `view_image` and `read_pdf`, the process record, argument checks |
+| `src/runner/`, `src/tools/` | seven's runner and tool store, copied; libraries |
 | `src/llm/` | the Ollama client and text tool-call recovery, from seven |
-| `src/state.ts` | the SQLite state, the inbox included |
+| `src/state.ts` | the SQLite state |
 | `src/api/` | the HTTP API, its shared types, and the workspace's files and databases (`workspace.ts`) |
 | `web/` | the web UI |
 | `test/` | `node:test` against a scripted model |
