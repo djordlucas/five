@@ -91,7 +91,9 @@ export async function runAgent(d: Deps, run: Run, o: AgentOptions): Promise<Agen
     const stepLog = run.log.child({ step });
     run.setLive("queued");
     const t0 = performance.now();
-    const { completion, waitedMs } = await d.pool.complete(
+    // The lead plans on its own model, when it has one; what its trials run uses the workers'.
+    const pool = run.kind === "lead" && d.leadPool ? d.leadPool : d.pool;
+    const { completion, waitedMs } = await pool.complete(
       {
         messages: [{ role: "system", content: `${today()}\n\n${o.system}` }, ...o.messages],
         ...(defs.length > 0 && { tools: defs }),

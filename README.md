@@ -74,6 +74,7 @@ defaults to; `.env.example` lists every variable:
 | Variable | Default | Meaning |
 |---|---|---|
 | `FIVE_OLLAMA_MODEL` | `qwen3.5:4b` | a pulled model with the tools capability |
+| `FIVE_LEAD_MODEL` | *(the same)* | the lead's own model, such as `qwen3.5:9b`: it plans on it, one call at a time besides the workers' slots; Ollama needs `OLLAMA_MAX_LOADED_MODELS=2` |
 | `FIVE_OLLAMA_ENDPOINT` | `http://localhost:11434` (Docker: `host.docker.internal`) | Ollama |
 | `FIVE_CONTEXT_TOKENS` | `16384` | the window of each of the model's slots |
 | `FIVE_THINK` | `off` | let a thinking model think |

@@ -143,6 +143,8 @@ export interface BoardCounts {
 
 export interface Status {
   model: string;
+  /** The lead's model, when it is not `model`. */
+  leadModel?: string;
   endpoint: string;
   /** The context window of one model slot, in tokens. */
   contextTokens: number;

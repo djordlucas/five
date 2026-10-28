@@ -992,6 +992,29 @@ test("five posts a feeds task on time, and the lead of a new five waits for the 
   );
 });
 
+test("the lead plans on its own model when it has one; the workers use theirs", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "five-test-"));
+  const cfg = loadConfig({ FIVE_WORKSPACE: dir, FIVE_TICK_MS: "20", FIVE_FEEDS_EVERY: "0", FIVE_LEAD_MODEL: "big" });
+  assert.equal(cfg.leadModel, "big");
+  const workers = scripted(() => ({ content: "Done with the test." }));
+  const lead = scripted(() => ({ content: "Nothing to plan." }));
+  const five = createFive(cfg, workers, noopLogger, lead);
+  open.push(five);
+  five.five.settings.update({ minOpenTasks: 0 });
+  five.five.start();
+  await until(() => events(five).some((e) => e.type === "run_ended"), "the lead's run");
+  five.five.pause();
+  await agent(five);
+  assert.deepEqual(
+    [lead.requests.length, system({ messages: lead.requests[0] ?? [] }).startsWith("You are the lead")],
+    [1, true],
+  );
+  assert.deepEqual(
+    workers.requests.map((r) => system({ messages: r })),
+    ["You are a test."],
+  );
+});
+
 test("the seed task workers are modules with a default export", async () => {
   const { transformSync } = await import("esbuild");
   const { SEEDS } = await import("../src/workers/seeds.ts");

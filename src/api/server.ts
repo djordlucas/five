@@ -121,6 +121,7 @@ export function createApi(opts: ApiOptions): http.Server {
     const s = five.status();
     return {
       model: cfg.model,
+      ...(cfg.leadModel && { leadModel: cfg.leadModel }),
       endpoint: cfg.endpoint,
       contextTokens: cfg.contextTokens,
       think: cfg.think,

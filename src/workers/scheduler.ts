@@ -39,6 +39,8 @@ export interface SchedulerOptions {
   runner: Runner;
   runs: RunTable;
   model: ChatModel;
+  /** The lead's own model: its calls go to it, one at a time, besides the others' slots. */
+  leadModel?: ChatModel;
   workspace: string;
   settings: Settings;
   /** How often the loop looks for work. */
@@ -89,6 +91,7 @@ export class Scheduler {
       runner: o.runner,
       runs: o.runs,
       pool: this.pool,
+      ...(o.leadModel && { leadPool: new ModelPool(o.leadModel, () => 1) }),
       settings: this.settings,
       workspace: o.workspace,
       history: new History(o.workspace, log),

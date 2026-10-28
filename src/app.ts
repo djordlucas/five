@@ -32,7 +32,8 @@ export interface Five {
   close(): Promise<void>;
 }
 
-export function createFive(cfg: Config, model: ChatModel, log: Logger = noopLogger): Five {
+/** leadModel: the lead's own model, when it has one. */
+export function createFive(cfg: Config, model: ChatModel, log: Logger = noopLogger, leadModel?: ChatModel): Five {
   const state = new State(cfg.stateDb);
   const lost = state.markLostRuns();
   if (lost > 0) log.warn("background runs lost at restart", { count: lost });
@@ -75,6 +76,7 @@ export function createFive(cfg: Config, model: ChatModel, log: Logger = noopLogg
     runner,
     runs,
     model,
+    ...(leadModel && { leadModel }),
     workspace: cfg.workspace,
     settings: cfg.settings,
     tickMs: cfg.tickMs,

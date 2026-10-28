@@ -24,16 +24,18 @@ const sinks: Sink[] = [stderrSink()];
 if (cfg.logFile) sinks.push(fileSink(cfg.logFile));
 const log = createLogger({ level: cfg.logLevel, sinks });
 
-const model = new Ollama({
-  model: cfg.model,
-  endpoint: cfg.endpoint,
-  contextTokens: cfg.contextTokens,
-  think: cfg.think,
-  ...(cfg.keepAlive && { keepAlive: cfg.keepAlive }),
-});
-const five = createFive(cfg, model, log);
+const ollama = (model: string) =>
+  new Ollama({
+    model,
+    endpoint: cfg.endpoint,
+    contextTokens: cfg.contextTokens,
+    think: cfg.think,
+    ...(cfg.keepAlive && { keepAlive: cfg.keepAlive }),
+  });
+const five = createFive(cfg, ollama(cfg.model), log, cfg.leadModel ? ollama(cfg.leadModel) : undefined);
 log.info("five started", {
   model: cfg.model,
+  ...(cfg.leadModel && { lead_model: cfg.leadModel }),
   endpoint: cfg.endpoint,
   context_tokens: cfg.contextTokens,
   think: cfg.think,

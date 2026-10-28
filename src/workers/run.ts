@@ -25,6 +25,8 @@ export interface Deps {
   runner: Runner;
   runs: RunTable;
   pool: ModelPool;
+  /** The lead's model, when it has its own. */
+  leadPool?: ModelPool;
   settings: SettingsStore;
   workspace: string;
   /** What runs changed, kept so a failed run's changes can be put back; none in a trial's scratch workspace. */
