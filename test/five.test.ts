@@ -690,6 +690,7 @@ test("define_worker: tried on a trial task first, refused for five's own workers
               { name: "count", description: "Counts words. Input: the text.", code, test_input: "a b c" },
             ],
             ["post_task", { worker: "count", title: "Count", input: "one two" }],
+            ["define_worker", { name: "count", description: "Counts.", code }],
           ],
         };
       }
@@ -709,6 +710,7 @@ test("define_worker: tried on a trial task first, refused for five's own workers
   assert.match(results[0] ?? "", /^error: "chat" is one of five's own workers/);
   assert.match(results[1] ?? "", /^not saved: the code needs `export default/);
   assert.match(results[2] ?? "", /^saved worker count \(revision 1\)[\s\S]*trial result:\ncounted 3/);
+  assert.match(results[4] ?? "", /^not saved: count exists and works; a revision needs test_input/);
   assert.equal((five.five.board.list()[0] as Task).result, "counted 2");
   assert.equal(fs.readFileSync(path.join(cfg.workspace, "count.txt"), "utf8"), "2");
   const asked = events(five).find((e) => e.type === "model" && e.prompt);
@@ -858,5 +860,14 @@ test("the API: status, the board, settings, the goal, the inbox, and a reset", a
     assert.ok(!fs.existsSync(path.join(cfg.workspace, "notes.md")));
   } finally {
     server.close();
+  }
+});
+
+test("the seed task workers are modules with a default export", async () => {
+  const { transformSync } = await import("esbuild");
+  const { SEEDS } = await import("../src/workers/seeds.ts");
+  for (const w of SEEDS) {
+    const out = transformSync(w.source, { loader: "ts", format: "esm" }).code;
+    assert.match(out, /as default\b|export default/, w.name);
   }
 });

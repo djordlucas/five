@@ -29,11 +29,11 @@ export const LEAD_SYSTEM = `You are the lead of five: a program that runs on its
 How five works:
 - The board holds tasks. Each names a task worker; five runs that worker for it as soon as one is free, several at once. A task's result is short and names the files where the work is.
 - A task worker is code: an ES module whose default export gets { task } (id, title, input) and returns the result. In it, five.llm.ask(prompt, { schema }) asks the model once (with a JSON schema, it returns the parsed object), five.llm.agent({ prompt, tools }) runs a small agent with tools such as search_web, fetch_url, read_file, write_file, five.web.feed(url) / text(url) / search(query) read the web, five.board.post(worker, title, input) posts a task, and Node's fs reads and writes the workspace. Let code do what code can — fetching, parsing, files — and the model only what needs judgment: that keeps every call small.
-- define_worker writes or revises a task worker (with test_input, it is tried first and only saved if it works); read_worker shows one. Your libraries (define_library) are shared code workers import as "lib:name".
+- Your task workers already work: give them tasks. Revise one only when its tasks fail or its results are poor — read_worker it first, and fix what the results show. define_worker writes a new worker or revises one; a revision must have test_input: it runs once as a real run (it reads and writes the workspace) and replaces the old one only if it works. Your libraries (define_library) are shared code workers import as "lib:name".
 - Workers share the workspace: they exchange data through files. Keep it organized.
 - Your context is small and fresh every run: what you know is in this prompt — the goal, the board, the workers, your notes. Keep your notes (${NOTES}) short and current with write_file: what you learned, what works, what to do next.
 
-Each run: read the results, decide what comes next, post tasks, fix or write workers when results are poor or missing, update your notes, and message the person (message_person) only when something matters to them. Then reply with one line: what you did.`;
+Each run: read the results, decide what comes next, post tasks for your workers, write a new worker only for work none of them does, update your notes, and message the person (message_person) only when something matters to them. Then reply with one line: what you did.`;
 
 /** The lead's run: its prompt, built now, and its tools. */
 export async function runLead(d: Deps, run: Run, more: { chat?: string }): Promise<string> {
@@ -94,7 +94,7 @@ function leadPrompt(d: Deps, run: Run, more: { chat?: string }): string {
     "",
     "## Now",
     "",
-    `${new Date().toISOString().slice(0, 16).replace("T", " ")} UTC, run ${run.n}. ${counts.open} open, ${counts.running} running; keep at least ${minOpenTasks} open. Decide, act, and reply with one line.`,
+    `${new Date().toISOString().slice(0, 16).replace("T", " ")} UTC, run ${run.n}. ${counts.open} open, ${counts.running} running; keep at least ${minOpenTasks} open.${counts.open + counts.running === 0 ? " The board is empty: post tasks for your workers first." : ""} Decide, act, and reply with one line.`,
   );
   return parts.join("\n");
 }
@@ -145,6 +145,10 @@ export function workerTools(d: Deps): AgentTool[] {
           built = await buildWorker(d, source, deps);
         } catch (err) {
           return `not saved: ${err instanceof Error ? err.message : String(err)}`;
+        }
+        const previous = d.workers.get(name);
+        if (previous && typeof a.test_input !== "string") {
+          return `not saved: ${name} exists and works; a revision needs test_input, so it is tried before it replaces r${previous.meta.revision}`;
         }
         const timeoutMs = typeof a.timeout_seconds === "number" ? Math.round(a.timeout_seconds * 1000) : undefined;
         const draft = {

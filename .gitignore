@@ -6,6 +6,7 @@ web/dist/
 
 # The container workspace (compose.yaml mounts it at /workspace).
 /workspace/
+/workspace-*/
 
 .env
 *.log

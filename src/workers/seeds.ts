@@ -46,15 +46,13 @@ export default async ({ task }) => {
   for (const url of feeds) {
     try {
       for (const item of await five.web.feed(url)) {
-        if (!item.link || seen.has(item.link)) continue;
-        seen.add(item.link);
+        if (!item.link || seen.has(item.link) || fresh.some((f) => f.link === item.link)) continue;
         fresh.push({ ...item, source: new URL(url).hostname.replace(/^(www|feeds|rss)\\./, "") });
       }
     } catch (err) {
       failed.push(\`\${url}: \${err.message}\`);
     }
   }
-  fs.writeFileSync(SEEN, JSON.stringify([...seen].slice(-5000)));
   const failures = failed.length ? \` Failed: \${failed.join("; ")}\` : "";
   if (!fresh.length) return \`No new items in \${feeds.length} feeds.\${failures}\`;
 
@@ -87,6 +85,9 @@ export default async ({ task }) => {
   const file = \`news/\${day}.md\`;
   if (!fs.existsSync(file)) fs.writeFileSync(file, \`# News, \${day}\\n\\n\`);
   fs.appendFileSync(file, picked.map((p) => \`- \${p.line} — [\${p.source}](\${p.link})\\n\`).join(""));
+  // Seen only once the model has been through them: a failed run leaves them for the next.
+  for (const it of fresh) seen.add(it.link);
+  fs.writeFileSync(SEEN, JSON.stringify([...seen].slice(-5000)));
   return \`\${fresh.length} new items from \${feeds.length} feeds; \${picked.length} added to \${file}.\${failures}\`;
 };
 `,
