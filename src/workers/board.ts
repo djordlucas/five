@@ -92,6 +92,16 @@ export class Board {
   }
 
   /** Tasks a worker did, and failed. */
+  /** How many of a worker's latest finished tasks failed. */
+  recentFailures(worker: string, latest = 5): number {
+    const row = this.state.db
+      .prepare(
+        "SELECT COUNT(*) FILTER (WHERE status = 'failed') AS failed FROM (SELECT status FROM tasks WHERE worker = ? AND status IN ('done', 'failed') ORDER BY id DESC LIMIT ?)",
+      )
+      .get(worker, latest) as Record<string, number>;
+    return Number(row.failed);
+  }
+
   tally(worker: string): { done: number; failed: number } {
     const row = this.state.db
       .prepare(

@@ -726,7 +726,7 @@ test("a date that has not come yet is refused in a task and a path", async () =>
   assert.equal(five.five.board.counts().open, 0);
 });
 
-test("define_worker: tried on a trial task first, refused for five's own workers; then it does a task", async () => {
+test("define_worker: tried on a trial task first, refused for five's own workers and for a worker that works; then it does a task", async () => {
   const code = `export default async ({ task }) => {
   const out = await five.llm.ask("Count the words: " + task.input, { schema: { type: "object", properties: { n: { type: "integer" } }, required: ["n"] } });
   fs.writeFileSync("count.txt", String(out.n));
@@ -746,7 +746,11 @@ test("define_worker: tried on a trial task first, refused for five's own workers
               { name: "count", description: "Counts words. Input: the text.", code, test_input: "a b c" },
             ],
             ["post_task", { worker: "count", title: "Count", input: "one two" }],
-            ["define_worker", { name: "count", description: "Counts.", code }],
+            ["define_worker", { name: "count", description: "Counts.", code, test_input: "x" }],
+            [
+              "define_worker",
+              { name: "empty", description: "Nothing.", code: "export default async () => {}", test_input: "x" },
+            ],
           ],
         };
       }
@@ -766,7 +770,9 @@ test("define_worker: tried on a trial task first, refused for five's own workers
   assert.match(results[0] ?? "", /^error: "chat" is one of five's own workers/);
   assert.match(results[1] ?? "", /^not saved: the code needs `export default/);
   assert.match(results[2] ?? "", /^saved worker count \(revision 1\)[\s\S]*trial result:\ncounted 3/);
-  assert.match(results[4] ?? "", /^not saved: count exists and works; a revision needs test_input/);
+  // A worker that works is not rewritten; one that returns nothing fails its trial.
+  assert.match(results[4] ?? "", /^not saved: count works — 0 tasks done, none of its latest failed/);
+  assert.match(results[5] ?? "", /^not saved: the trial failed\nthe worker returned nothing/);
   assert.equal((five.five.board.list()[0] as Task).result, "counted 2");
   assert.equal(fs.readFileSync(path.join(cfg.workspace, "count.txt"), "utf8"), "2");
   const asked = events(five).find((e) => e.type === "model" && e.prompt);

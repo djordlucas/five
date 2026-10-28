@@ -63,7 +63,8 @@ export async function runWorker(
     throw new Error(`${r.error ?? "failed"}${out}`);
   }
   const v = r.value;
-  if (v === null || v === undefined || v === "") return "(the worker returned nothing)";
+  if (v === null || v === undefined || v === "")
+    throw new Error("the worker returned nothing: its default export must return the task's result");
   return typeof v === "string" ? v : JSON.stringify(v, null, 2);
 }
 

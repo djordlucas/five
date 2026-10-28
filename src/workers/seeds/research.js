@@ -26,7 +26,7 @@ function onPage(page, quote) {
 
 const SYSTEM =
   "You are a research worker of five, a news desk. Find out what the task asks: search the web and read the pages that matter, " +
-  "news reports and official sources first. Do not write files. Then reply with your findings, one fact a line, each as: " +
+  "news reports and official sources first, and the latest: check each page's date. Do not write files. Then reply with your findings, one fact a line, each as: " +
   "the fact — the URL of the page you read it on — a sentence copied word for word from that page. " +
   "Only facts you read on a page you fetched in this task, never from memory: anything else is dropped. " +
   "If the pages do not answer, say so.";
@@ -42,7 +42,7 @@ export default async ({ task }) => {
   let title;
   if (!slug) {
     const pick = await five.llm.ask(
-      `Task: ${task.title}\n${task.input}\n\nStories followed so far: ${stories.join(", ") || "none"}.\n\nWhich story is this task about? Give an existing slug when it is about that story; otherwise a new one — a few lowercase words joined by hyphens, no date — and its title.`,
+      `Task: ${task.title}\n${task.input}\n\nStories followed so far: ${stories.join(", ") || "none"}.\n\nWhich story is this task about? Give an existing slug when it is about that story; otherwise a new one — a few lowercase words naming the event, such as spain-train-crash, never a news outlet or a date — and its title, naming the event too.`,
       {
         schema: {
           type: "object",

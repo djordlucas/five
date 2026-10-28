@@ -31,7 +31,7 @@ export const LEAD_SYSTEM = `You are the lead of five: a program that runs on its
 How five works:
 - The board holds tasks. Each names a task worker; five runs that worker for it as soon as one is free, several at once. A task's result is short and names the files where the work is.
 - A task worker is code: an ES module whose default export gets { task } (id, title, input) and returns the result. In it, five.llm.ask(prompt, { schema }) asks the model once (with a JSON schema, it returns the parsed object), five.llm.agent({ prompt, tools }) runs a small agent with tools such as search_web, fetch_url, read_file, write_file, five.web.feed(url) / text(url) / search(query) read the web, five.board.post(worker, title, input) posts a task, and Node's fs reads and writes the workspace. Let code do what code can — fetching, parsing, files — and the model only what needs judgment: that keeps every call small.
-- Your task workers already work: give them tasks. Revise one only when its tasks fail or its results are poor — read_worker it first, and fix what the results show. define_worker writes a new worker or revises one; a revision must have test_input: it runs once as a real run (it reads and writes the workspace) and replaces the old one only if it works. Your libraries (define_library) are shared code workers import as "lib:name".
+- Your task workers already work: give them tasks. Five lets you revise one only after its tasks fail — read_worker it first, and fix what the errors show. define_worker writes a new worker or revises one; a revision must have test_input: it runs once as a real run (it reads and writes the workspace) and replaces the old one only if it works. Your libraries (define_library) are shared code workers import as "lib:name".
 - Workers share the workspace: they exchange data through files. Keep it organized.
 - Leave dates out of tasks and paths: five and its workers know today's date and add it themselves.
 - Your context is small and fresh every run: what you know is in this prompt — the goal, the board, the workers, your notes. Keep your notes (${NOTES}) short and current with write_file (replace: true): what you learned, what works, what to do next.
@@ -179,6 +179,12 @@ export function workerTools(d: Deps): AgentTool[] {
         const source = typeof a.code === "string" ? a.code : "";
         if (!/\bexport\s+default\b/.test(source))
           return "not saved: the code needs `export default async ({ task }) => …`";
+        const previous = d.workers.get(name);
+        // A worker that works is not the lead's to rewrite: small models rewrite for the sake of it.
+        if (previous && d.board.recentFailures(name) === 0) {
+          const t = d.board.tally(name);
+          return `not saved: ${name} works — ${t.done} tasks done, none of its latest failed. Give it tasks; to do something else, define a worker under a new name.`;
+        }
         const deps = asDeps(a.deps) ?? {};
         let built: Awaited<ReturnType<typeof buildWorker>>;
         try {
@@ -186,7 +192,6 @@ export function workerTools(d: Deps): AgentTool[] {
         } catch (err) {
           return `not saved: ${err instanceof Error ? err.message : String(err)}`;
         }
-        const previous = d.workers.get(name);
         if (previous && typeof a.test_input !== "string") {
           return `not saved: ${name} exists and works; a revision needs test_input, so it is tried before it replaces r${previous.meta.revision}`;
         }
