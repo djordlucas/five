@@ -661,7 +661,11 @@ test("the lead posts a task; the research worker does it through five.llm.agent,
       return {
         content: JSON.stringify({
           facts: [
-            { fact: "X is the 24th letter.", url, quote: "X is the twenty-fourth letter of the Latin alphabet" },
+            {
+              fact: "X is the twenty-fourth letter.",
+              url,
+              quote: "X is the twenty-fourth letter of the Latin alphabet",
+            },
             { fact: "X was invented in 1900.", url, quote: "The letter X was invented by a committee in 1900." },
             // On the page the agent read, not the one it names: kept, with the page it is on.
             {
@@ -672,6 +676,12 @@ test("the lead posts a task; the research worker does it through five.llm.agent,
             // In other words than the page's: kept with the page's sentence, when its words and numbers are there.
             { fact: "X is about 0.15 percent of the letters in English text.", url, quote: "X makes up 0.15%." },
             { fact: "X is about 3 percent of the letters in English text.", url, quote: "X makes up 3%." },
+            // A quote on the page, but a fact that says more than it: dropped.
+            {
+              fact: "X was the 24th letter in 1900.",
+              url,
+              quote: "X is the twenty-fourth letter of the Latin alphabet",
+            },
             // Said twice: kept once.
             { fact: "X is a letter.", url, quote: "X is the twenty-fourth letter of the Latin alphabet" },
           ],
@@ -693,13 +703,13 @@ test("the lead posts a task; the research worker does it through five.llm.agent,
   assert.deepEqual([task.worker, task.status, task.postedBy], ["research", "done", "lead"]);
   assert.match(
     task.result ?? "",
-    /^3 checked facts added to news\/stories\/letter-x\.md \(story: letter-x\)\. 2 dropped/,
+    /^3 checked facts added to news\/stories\/letter-x\.md \(story: letter-x\)\. 3 dropped/,
   );
   const day = new Date().toISOString().slice(0, 10);
   const story = fs.readFileSync(path.join(cfg.workspace, "news/stories/letter-x.md"), "utf8");
   assert.equal(
     story,
-    `# Find what X is\n\n## ${day}\n\n- X is the 24th letter. ([source](${url}): “X is the twenty-fourth letter of the Latin alphabet”)\n- X sounds like ks. ([source](${url}): “In English it is pronounced like ks, as in the word box.”)\n- X is about 0.15 percent of the letters in English text. ([source](${url}): “Of the letters in English text, about 0.15 percent are an X.”)\n- Watch: Whether Y follows.\n`,
+    `# Find what X is\n\n## ${day}\n\n- X is the twenty-fourth letter. ([source](${url}): “X is the twenty-fourth letter of the Latin alphabet”)\n- X sounds like ks. ([source](${url}): “In English it is pronounced like ks, as in the word box.”)\n- X is about 0.15 percent of the letters in English text. ([source](${url}): “Of the letters in English text, about 0.15 percent are an X.”)\n- Watch: Whether Y follows.\n`,
   );
   assert.match(
     fs.readFileSync(path.join(cfg.workspace, "news/index.md"), "utf8"),

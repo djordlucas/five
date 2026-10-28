@@ -59,10 +59,9 @@ function sentences(text) {
   return [...all, ...all.slice(0, -1).map((t, i) => `${t} ${all[i + 1]}`)];
 }
 
-/** The page's sentence that says the claim: most of its words and every number; undefined when none. */
-function saying(page, claim) {
+/** The page's sentence that says the claim: most of its words, and every number of the fact; undefined when none. */
+function saying(page, claim, nums) {
   const want = [...new Set(words(claim))];
-  const nums = numbers(claim);
   if (want.length < 3) return undefined;
   let best;
   for (const s of page.sentences) {
@@ -183,9 +182,11 @@ export default async ({ task }) => {
     // The quote as given, or the page's own sentence that says the fact.
     let found;
     for (const page of order) {
-      if (onPage(page.text, f.quote)) found = { url: page.url, quote: f.quote };
+      // A quote on the page backs a fact only when it has the fact's numbers: else the fact says more than it.
+      if (onPage(page.text, f.quote) && numbers(f.fact).every((n) => numbers(f.quote).includes(n)))
+        found = { url: page.url, quote: f.quote };
       else {
-        const s = saying(page, f.fact) ?? saying(page, f.quote);
+        const s = saying(page, f.fact, numbers(f.fact)) ?? saying(page, f.quote, numbers(f.fact));
         if (s) found = { url: page.url, quote: s };
       }
       if (found) break;
