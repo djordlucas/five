@@ -15,7 +15,7 @@ import { awaitRun } from "../agent/builtins/index.ts";
 import type { HostModules } from "../runner/index.ts";
 import { type Bundled, bundleLibraries, importsLibraries } from "../tools/libs.ts";
 import { runAgent, today } from "./agent.ts";
-import { MAX_INPUT, MAX_TITLE } from "./board.ts";
+import { clip, MAX_INPUT, MAX_TITLE } from "./board.ts";
 import { type Deps, type Run, runScope } from "./run.ts";
 import type { StoredWorker } from "./store.ts";
 import { toolsByName } from "./tools.ts";
@@ -30,6 +30,8 @@ const AGENT_SYSTEM =
 
 /** The longest prompt an event keeps of one llm.ask. */
 const SHOWN_PROMPT = 2000;
+/** Words a task's result has at least: fewer is a placeholder, not a result. */
+const MIN_RESULT_WORDS = 4;
 
 export interface TaskInput {
   id: number;
@@ -65,7 +67,13 @@ export async function runWorker(
   const v = r.value;
   if (v === null || v === undefined || v === "")
     throw new Error("the worker returned nothing: its default export must return the task's result");
-  return typeof v === "string" ? v : JSON.stringify(v, null, 2);
+  const text = typeof v === "string" ? v : JSON.stringify(v, null, 2);
+  // A placeholder — {"done": true}, "ok" — is no result: say what was done, and where.
+  if ((text.match(/[A-Za-z]{2,}/g) ?? []).length < MIN_RESULT_WORDS)
+    throw new Error(
+      `the worker's result says nothing (${clip(text, 80)}): it must return, in words, what it found or did and the files it wrote`,
+    );
+  return text;
 }
 
 /** Bundle a worker's libraries into it and install its packages; throws with what is wrong. */

@@ -730,8 +730,9 @@ test("define_worker: tried on a trial task first, refused for five's own workers
   const code = `export default async ({ task }) => {
   const out = await five.llm.ask("Count the words: " + task.input, { schema: { type: "object", properties: { n: { type: "integer" } }, required: ["n"] } });
   fs.writeFileSync("count.txt", String(out.n));
-  return "counted " + out.n;
+  return "counted " + out.n + " words, in count.txt";
 };`;
+  const said = 'export default async () => "did nothing, and said so in words";';
   const { five, model, cfg } = make((req) => {
     const sys = system(req);
     const steps = req.messages.filter((m) => m.role === "assistant").length;
@@ -751,6 +752,17 @@ test("define_worker: tried on a trial task first, refused for five's own workers
               "define_worker",
               { name: "empty", description: "Nothing.", code: "export default async () => {}", test_input: "x" },
             ],
+            [
+              "define_worker",
+              {
+                name: "stub",
+                description: "Nothing.",
+                code: "export default async () => ({ done: true })",
+                test_input: "x",
+              },
+            ],
+            ["define_worker", { name: "fifth", description: "Talks.", code: said, test_input: "x" }],
+            ["define_worker", { name: "sixth", description: "Talks.", code: said, test_input: "x" }],
           ],
         };
       }
@@ -764,16 +776,23 @@ test("define_worker: tried on a trial task first, refused for five's own workers
   five.five.settings.update({ minOpenTasks: 0 });
   five.five.start();
   await until(() => five.five.board.counts().done === 1, "the count task");
+  await until(() => model.requests.some((r) => r.some((m) => m.role === "tool")), "the lead's second call");
   five.five.pause();
   const lead = model.requests.find((r) => r.some((m) => m.role === "tool")) ?? [];
   const results = lead.filter((m) => m.role === "tool").map((m) => m.content);
   assert.match(results[0] ?? "", /^error: "chat" is one of five's own workers/);
   assert.match(results[1] ?? "", /^not saved: the code needs `export default/);
-  assert.match(results[2] ?? "", /^saved worker count \(revision 1\)[\s\S]*trial result:\ncounted 3/);
+  assert.match(
+    results[2] ?? "",
+    /^saved worker count \(revision 1\)[\s\S]*trial result:\ncounted 3 words, in count\.txt/,
+  );
   // A worker that works is not rewritten; one that returns nothing fails its trial.
   assert.match(results[4] ?? "", /^not saved: count works — 0 tasks done, none of its latest failed/);
   assert.match(results[5] ?? "", /^not saved: the trial failed\nthe worker returned nothing/);
-  assert.equal((five.five.board.list()[0] as Task).result, "counted 2");
+  assert.match(results[6] ?? "", /^not saved: the trial failed\nthe worker's result says nothing \(\{/);
+  assert.match(results[7] ?? "", /^saved worker fifth/);
+  assert.match(results[8] ?? "", /^not saved: five keeps at most 4 task workers — count \(1 done/);
+  assert.equal((five.five.board.list()[0] as Task).result, "counted 2 words, in count.txt");
   assert.equal(fs.readFileSync(path.join(cfg.workspace, "count.txt"), "utf8"), "2");
   const asked = events(five).find((e) => e.type === "model" && e.prompt);
   assert.equal(asked?.type === "model" && asked.prompt, "Count the words: a b c");
@@ -788,6 +807,7 @@ test("define_worker: tried on a trial task first, refused for five's own workers
         "chat:chat:true:-:0",
         "count:task:false:1:1",
         "feeds:task:false:1:0",
+        "fifth:task:false:1:0",
         "research:task:false:1:0",
       ],
     );

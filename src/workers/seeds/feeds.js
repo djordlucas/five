@@ -81,5 +81,10 @@ export default async ({ task }) => {
   // Seen only once the model has been through them: a failed run leaves them for the next.
   for (const it of fresh) seen.add(it.link);
   fs.writeFileSync(SEEN, JSON.stringify([...seen].slice(-5000)));
-  return `${fresh.length} new items; ${picked.length} added to ${file}.${said}`;
+  // The top headlines, for the lead to pick stories from.
+  const top = picked
+    .slice(0, 6)
+    .map((p) => `\n- ${p.line}`)
+    .join("");
+  return `${fresh.length} new items; ${picked.length} added to ${file}.${said}${top ? `\nTop of them:${top}` : ""}`;
 };

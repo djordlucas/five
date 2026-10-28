@@ -31,12 +31,12 @@ export const LEAD_SYSTEM = `You are the lead of five: a program that runs on its
 How five works:
 - The board holds tasks. Each names a task worker; five runs that worker for it as soon as one is free, several at once. A task's result is short and names the files where the work is.
 - A task worker is code: an ES module whose default export gets { task } (id, title, input) and returns the result. In it, five.llm.ask(prompt, { schema }) asks the model once (with a JSON schema, it returns the parsed object), five.llm.agent({ prompt, tools }) runs a small agent with tools such as search_web, fetch_url, read_file, write_file, five.web.feed(url) / text(url) / search(query) read the web, five.board.post(worker, title, input) posts a task, and Node's fs reads and writes the workspace. Let code do what code can — fetching, parsing, files — and the model only what needs judgment: that keeps every call small.
-- Your task workers already work: give them tasks. Five lets you revise one only after its tasks fail — read_worker it first, and fix what the errors show. define_worker writes a new worker or revises one; a revision must have test_input: it runs once as a real run (it reads and writes the workspace) and replaces the old one only if it works. Your libraries (define_library) are shared code workers import as "lib:name".
+- Your task workers already work: give them tasks. Five lets you revise one only after its tasks fail — read_worker it first, and fix what the errors show. define_worker writes a new worker or revises one; a revision must have test_input: it runs once as a real run (it reads and writes the workspace) and replaces the old one only if it works. Five keeps only a few task workers, and a result that does not say in words what was done counts as a failure. Your libraries (define_library) are shared code workers import as "lib:name".
 - Workers share the workspace: they exchange data through files. Keep it organized.
 - Leave dates out of tasks and paths: five and its workers know today's date and add it themselves.
 - Your context is small and fresh every run: what you know is in this prompt — the goal, the board, the workers, your notes. Keep your notes (${NOTES}) short and current with write_file (replace: true): what you learned, what works, what to do next.
 
-Each run: read the results, decide what comes next, post tasks for your workers, write a new worker only for work none of them does, update your notes, and message the person (message_person) only when something matters to them. Then reply with one line: what you did.`;
+Each run: read the results, decide what comes next — pick what to follow from what the workers found, not from memory — post tasks for your workers, write a new worker only for work none of them does, update your notes, and message the person (message_person) only when something matters to them. Then reply with one line: what you did.`;
 
 /** The lead's run: its prompt, built now, and its tools. */
 export async function runLead(d: Deps, run: Run, more: { chat?: string }): Promise<string> {
@@ -180,6 +180,15 @@ export function workerTools(d: Deps): AgentTool[] {
         if (!/\bexport\s+default\b/.test(source))
           return "not saved: the code needs `export default async ({ task }) => …`";
         const previous = d.workers.get(name);
+        const { maxWorkers } = d.settings.current;
+        const all = d.workers.list();
+        if (!previous && all.length >= maxWorkers) {
+          const tallies = all.map((w) => {
+            const t = d.board.tally(w.name);
+            return `${w.name} (${t.done} done, ${t.failed} failed)`;
+          });
+          return `not saved: five keeps at most ${maxWorkers} task workers — ${tallies.join(", ")}. Give tasks to one of them, or delete_worker the one that does least first.`;
+        }
         // A worker that works is not the lead's to rewrite: small models rewrite for the sake of it.
         if (previous && d.board.recentFailures(name) === 0) {
           const t = d.board.tally(name);

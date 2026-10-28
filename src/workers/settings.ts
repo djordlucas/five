@@ -35,6 +35,15 @@ export const FIELDS: SettingField[] = [
     help: "The lead runs when the board has fewer open tasks than this, at most every 30 seconds.",
   },
   {
+    key: "maxWorkers",
+    group: "Workers",
+    label: "Task workers at most",
+    unit: "workers",
+    min: 1,
+    max: 50,
+    help: "The lead defines a new task worker only while there are fewer than this; past it, it deletes one first. Small models otherwise make a new worker for every task.",
+  },
+  {
     key: "leadEverySeconds",
     group: "Workers",
     label: "Lead runs at least every",
@@ -104,6 +113,7 @@ export const DEFAULTS: Settings = {
   slots: 4,
   taskRuns: 4,
   minOpenTasks: 4,
+  maxWorkers: 4,
   leadEverySeconds: 600,
   taskTimeoutSeconds: 600,
   maxSteps: 12,

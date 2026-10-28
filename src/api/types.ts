@@ -365,6 +365,7 @@ export interface Settings {
   taskRuns: number;
   leadEverySeconds: number;
   minOpenTasks: number;
+  maxWorkers: number;
   maxSteps: number;
   runTokens: number;
   resultChars: number;
