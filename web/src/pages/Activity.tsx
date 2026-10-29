@@ -186,6 +186,7 @@ function Controls() {
       <div class={styles.title}>
         <h2>
           five · {s.model}
+          {s.leadModel && ` · lead ${s.leadModel}`}
           {s.think && ' · thinking'}
         </h2>
         <span class="muted">{facts.join(' · ')}</span>

@@ -7,6 +7,8 @@
 //   five.llm.agent({ prompt, system?, tools?, maxSteps? })   a small agent with
 //       the tools named (the workspace and web ones by default); its answer
 //   five.web.text(url) · five.web.feed(url) · five.web.search(query)
+//   five.web.read()   what this run's agents read: [{ url, text }], pages and
+//       search results, to check their reports against
 //   five.board.post(worker, title, input?)                  a task for another worker
 //
 // and Node's own fs, fetch and the rest, in the workspace.
@@ -15,10 +17,10 @@ import { awaitRun } from "../agent/builtins/index.ts";
 import type { HostModules } from "../runner/index.ts";
 import { type Bundled, bundleLibraries, importsLibraries } from "../tools/libs.ts";
 import { runAgent, today } from "./agent.ts";
-import { MAX_INPUT, MAX_TITLE } from "./board.ts";
+import { clip, MAX_INPUT, MAX_TITLE } from "./board.ts";
 import { type Deps, type Run, runScope } from "./run.ts";
 import type { StoredWorker } from "./store.ts";
-import { toolsByName } from "./tools.ts";
+import { sameTask, toolsByName } from "./tools.ts";
 import { fetchFeed, fetchText, searchWeb } from "./web.ts";
 
 /** The tools llm.agent gets when the worker names none. */
@@ -30,6 +32,8 @@ const AGENT_SYSTEM =
 
 /** The longest prompt an event keeps of one llm.ask. */
 const SHOWN_PROMPT = 2000;
+/** Words a task's result has at least: fewer is a placeholder, not a result. */
+const MIN_RESULT_WORDS = 4;
 
 export interface TaskInput {
   id: number;
@@ -54,6 +58,9 @@ export async function runWorker(
     log: run.log,
     host: hostFor(d, run),
     label: `worker ${worker.meta.name}`,
+    cwd: d.workspace,
+    // Its writes are kept first, so a failed run's can be put back.
+    ...(d.history && { env: { FIVE_KEEP_DIR: d.history.dir(run.n) } }),
   });
   const r = await awaitRun(handle, run.signal);
   run.live = undefined;
@@ -63,8 +70,18 @@ export async function runWorker(
     throw new Error(`${r.error ?? "failed"}${out}`);
   }
   const v = r.value;
-  if (v === null || v === undefined || v === "") return "(the worker returned nothing)";
-  return typeof v === "string" ? v : JSON.stringify(v, null, 2);
+  if (v === null || v === undefined || v === "")
+    throw new Error("the worker returned nothing: its default export must return the task's result");
+  // A worker that caught its own error and returned it has failed all the same.
+  if (typeof v === "object" && "error" in v && v.error)
+    throw new Error(`the worker returned an error: ${clip(String(v.error), 500)}`);
+  const text = typeof v === "string" ? v : JSON.stringify(v, null, 2);
+  // A placeholder — {"done": true}, "ok" — is no result: say what was done, and where.
+  if ((text.match(/[A-Za-z]{2,}/g) ?? []).length < MIN_RESULT_WORDS)
+    throw new Error(
+      `the worker's result says nothing (${clip(text, 80)}): it must return, in words, what it found or did and the files it wrote`,
+    );
+  return text;
 }
 
 /** Bundle a worker's libraries into it and install its packages; throws with what is wrong. */
@@ -104,15 +121,21 @@ function hostFor(d: Deps, run: Run): HostModules {
       text: inRun(async (url: unknown) => fetchText(String(url), run.signal)),
       feed: inRun(async (url: unknown) => fetchFeed(String(url), run.signal)),
       search: inRun(async (q: unknown) => searchWeb(String(q), run.signal)),
+      // What this run's agents read: to check what they report against it.
+      read: inRun(async () => [...run.read.values()]),
     },
     board: {
       post: inRun(async (worker: unknown, title: unknown, input: unknown) => {
+        // A trial's tasks are not posted: it is a try, not work.
+        if (!d.history) return 0;
         const w = String(worker ?? "");
         if (!d.workers.get(w)) throw new Error(`no task worker named "${w}"`);
         const t = String(title ?? "").trim();
         if (!t || t.length > MAX_TITLE) throw new Error(`a title is 1 to ${MAX_TITLE} characters`);
         const i = typeof input === "string" ? input : input === undefined ? "" : JSON.stringify(input);
         if (i.length > MAX_INPUT) throw new Error(`an input is at most ${MAX_INPUT} characters`);
+        const same = d.board.alike({ worker: w, title: t, input: i });
+        if (same) throw new Error(`not posted: ${sameTask(same)}`);
         const task = d.board.post({ worker: w, title: t, input: i, by: run.worker });
         run.emit({ type: "task", action: "posted", id: task.id, worker: w, title: t, by: run.worker });
         return task.id;

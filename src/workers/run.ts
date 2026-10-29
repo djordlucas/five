@@ -11,6 +11,7 @@ import type { State } from "../state.ts";
 import type { LibraryStore } from "../tools/libs.ts";
 import type { ToolStore } from "../tools/store.ts";
 import type { Board } from "./board.ts";
+import type { History } from "./history.ts";
 import type { ModelPool } from "./pool.ts";
 import type { SettingsStore } from "./settings.ts";
 import type { WorkerStore } from "./store.ts";
@@ -24,8 +25,12 @@ export interface Deps {
   runner: Runner;
   runs: RunTable;
   pool: ModelPool;
+  /** The lead's model, when it has its own. */
+  leadPool?: ModelPool;
   settings: SettingsStore;
   workspace: string;
+  /** What runs changed, kept so a failed run's changes can be put back; none in a trial's scratch workspace. */
+  history?: History;
   log: Logger;
   /** Record an event of a run (0: of none). */
   emit(run: number, body: EventBody): void;
@@ -52,6 +57,8 @@ export class Run {
   live?: { phase: LiveWork["phase"]; startedAt: number; tool?: string; thinking?: string; content?: string };
   /** Images view_image attached in this step, shown after its results. */
   attached: string[] = [];
+  /** What its agents read on the web — pages, search results — by URL: what its code can check their reports against. */
+  readonly read = new Map<string, { url: string; text: string }>();
   private readonly emitter: (body: EventBody) => void;
 
   constructor(o: {

@@ -8,6 +8,8 @@ import { DEFAULTS, type Settings } from "./workers/settings.ts";
 
 export interface Config {
   model: string;
+  /** The lead's model, when it is not `model`: a bigger one plans while small ones work. Empty: `model`. */
+  leadModel: string;
   endpoint: string;
   /** The context window of each of the model's slots (num_ctx), in tokens. */
   contextTokens: number;
@@ -43,6 +45,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const home = path.join(workspace, ".five");
   return {
     model: env.FIVE_OLLAMA_MODEL ?? "qwen3.5:4b",
+    leadModel: env.FIVE_LEAD_MODEL && env.FIVE_LEAD_MODEL !== env.FIVE_OLLAMA_MODEL ? env.FIVE_LEAD_MODEL : "",
     endpoint: env.FIVE_OLLAMA_ENDPOINT ?? OLLAMA_ENDPOINT,
     contextTokens: int(env.FIVE_CONTEXT_TOKENS, 16_384),
     keepAlive: env.FIVE_OLLAMA_KEEP_ALIVE ?? "",
@@ -69,6 +72,7 @@ function settingsDefaults(env: NodeJS.ProcessEnv): Settings {
     taskRuns: int(env.FIVE_TASK_RUNS, DEFAULTS.taskRuns),
     maxSteps: Math.max(1, int(env.FIVE_MAX_STEPS, DEFAULTS.maxSteps)),
     runTokens: Math.max(1000, int(env.FIVE_RUN_TOKENS, DEFAULTS.runTokens)),
+    feedsEverySeconds: int(env.FIVE_FEEDS_EVERY, DEFAULTS.feedsEverySeconds),
   };
 }
 

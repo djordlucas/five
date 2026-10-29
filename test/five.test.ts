@@ -10,6 +10,7 @@ import type {
   DbRows,
   DbTable,
   Event,
+  FileHistory,
   LibraryDetail,
   LibraryInfo,
   ProcessDetail,
@@ -32,7 +33,7 @@ import { type AgentResult, runAgent } from "../src/workers/agent.ts";
 import { Board } from "../src/workers/board.ts";
 import { ModelPool } from "../src/workers/pool.ts";
 import { Run, runScope } from "../src/workers/run.ts";
-import { toolsByName } from "../src/workers/tools.ts";
+import { boardTools, toolsByName, workspaceTools } from "../src/workers/tools.ts";
 import { feedItems, htmlToText, parseResults } from "../src/workers/web.ts";
 
 type Reply = { content?: string; calls?: [string, Record<string, unknown>][]; tokens?: number };
@@ -83,7 +84,7 @@ afterEach(async () => {
 
 function make(replies: Reply[] | ((req: CompletionRequest, n: number) => Reply), env: Record<string, string> = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "five-test-"));
-  const cfg = loadConfig({ FIVE_WORKSPACE: dir, FIVE_TICK_MS: "20", ...env });
+  const cfg = loadConfig({ FIVE_WORKSPACE: dir, FIVE_TICK_MS: "20", FIVE_FEEDS_EVERY: "0", ...env });
   const model = scripted(replies);
   const five = createFive(cfg, model);
   open.push(five);
@@ -161,6 +162,16 @@ test("the board: tasks posted, taken oldest first, finished; a task running when
   assert.equal(board.cancel(b.id), false, "a running task cannot be cancelled");
   assert.match(board.summary(), /#2 \[running\] feeds: B[\s\S]*Latest ended:\n- #1 research: A → found it/);
   assert.deepEqual(board.tally("research"), { done: 1, failed: 0 });
+  // A task like one open, running or just done is found: by its story, or a title saying much the same.
+  board.post({ worker: "research", title: "Monitor inflation data in Europe", input: "", by: "lead" });
+  board.post({ worker: "research", title: "Kherson ceasefire", input: "story: kherson-ceasefire", by: "lead" });
+  const like = (title: string, input = "", worker = "research") => board.alike({ worker, title, input })?.id;
+  assert.equal(like("Track European inflation data"), 3);
+  assert.equal(like("Anything", "story: kherson-ceasefire"), 4);
+  assert.equal(like("a"), a.id, "just done");
+  assert.equal(like("Monitor inflation data in Europe", "", "feeds"), undefined, "another worker");
+  assert.equal(like("Track the election in Brazil"), undefined);
+  assert.equal(board.latest("research")?.id, 4);
   state.close();
   // Five stopped with B running: it is open again.
   const again = new State(path.join(dir, "five.db"));
@@ -621,42 +632,99 @@ test("the Ollama client reads a streamed reply as it arrives", async () => {
   }
 });
 
-test("the lead posts a task; the research worker does it through five.llm.agent, and its result is on the board", async () => {
+test("the lead posts a task; the research worker does it through five.llm.agent, keeps only the facts its source says, and its result is on the board", async () => {
+  // The source the research agent reads.
+  const http = await import("node:http");
+  const site = http.createServer((_req, res) => {
+    res.setHeader("content-type", "text/html");
+    res.end(
+      "<html><body><p>X is the twenty-fourth letter of the Latin alphabet, used in many languages.</p><p>In English it is pronounced like ks, as in the word box.</p><p>Of the letters in English text, about 0.15 percent are an X.</p></body></html>",
+    );
+  });
+  await new Promise<void>((r) => site.listen(0, "127.0.0.1", r));
+  const url = `http://127.0.0.1:${(site.address() as { port: number }).port}/x`;
+  const last = (req: CompletionRequest) => String(req.messages.at(-1)?.content);
   const { five, model, cfg } = make((req) => {
     const sys = system(req);
     const steps = req.messages.filter((m) => m.role === "assistant").length;
     if (sys.startsWith("You are the lead")) {
       return steps === 0
-        ? { calls: [["post_task", { worker: "research", title: "Find what X is", input: "Write research/x.md." }]] }
+        ? { calls: [["post_task", { worker: "research", title: "Find what X is", input: "story: letter-x" }]] }
         : { content: "Posted one research task." };
     }
     if (sys.startsWith("You are a research worker")) {
       return steps === 0
-        ? { calls: [["write_file", { path: "research/x.md", content: "X is a letter. (https://x.test)" }]] }
-        : { content: "X is a letter: research/x.md" };
+        ? { calls: [["fetch_url", { url }]] }
+        : { content: `X is a letter — ${url} — X is the twenty-fourth letter of the Latin alphabet` };
+    }
+    if (last(req).startsWith("Research notes:")) {
+      return {
+        content: JSON.stringify({
+          facts: [
+            {
+              fact: "X is the twenty-fourth letter.",
+              url,
+              quote: "X is the twenty-fourth letter of the Latin alphabet",
+            },
+            { fact: "X was invented in 1900.", url, quote: "The letter X was invented by a committee in 1900." },
+            // On the page the agent read, not the one it names: kept, with the page it is on.
+            {
+              fact: "X sounds like ks.",
+              url: "https://elsewhere.invalid/x",
+              quote: "In English it is pronounced like ks, as in the word box.",
+            },
+            // In other words than the page's: kept with the page's sentence, when its words and numbers are there.
+            { fact: "X is about 0.15 percent of the letters in English text.", url, quote: "X makes up 0.15%." },
+            { fact: "X is about 3 percent of the letters in English text.", url, quote: "X makes up 3%." },
+            // A quote on the page, but a fact that says more than it: dropped.
+            {
+              fact: "X was the 24th letter in 1900.",
+              url,
+              quote: "X is the twenty-fourth letter of the Latin alphabet",
+            },
+            // Said twice: kept once.
+            { fact: "X is a letter.", url, quote: "X is the twenty-fourth letter of the Latin alphabet" },
+          ],
+          watch: "Whether Y follows.",
+        }),
+      };
     }
     return { content: "?" };
   });
-  five.five.settings.update({ minOpenTasks: 0 });
-  five.five.start();
-  await until(() => five.five.board.counts().done === 1, "the task to be done");
-  five.five.pause();
+  try {
+    five.five.settings.update({ minOpenTasks: 0 });
+    five.five.start();
+    await until(() => five.five.board.counts().done === 1, "the task to be done");
+    five.five.pause();
+  } finally {
+    site.close();
+  }
   const task = five.five.board.list()[0] as Task;
-  assert.deepEqual(
-    [task.worker, task.status, task.postedBy, task.result],
-    ["research", "done", "lead", "X is a letter: research/x.md"],
+  assert.deepEqual([task.worker, task.status, task.postedBy], ["research", "done", "lead"]);
+  assert.match(
+    task.result ?? "",
+    /^3 checked facts added to news\/stories\/letter-x\.md \(story: letter-x\)\. 3 dropped/,
   );
-  assert.equal(fs.readFileSync(path.join(cfg.workspace, "research/x.md"), "utf8"), "X is a letter. (https://x.test)");
+  const day = new Date().toISOString().slice(0, 10);
+  const story = fs.readFileSync(path.join(cfg.workspace, "news/stories/letter-x.md"), "utf8");
+  assert.equal(
+    story,
+    `# Find what X is\n\n## ${day}\n\n- X is the twenty-fourth letter. ([source](${url}): “X is the twenty-fourth letter of the Latin alphabet”)\n- X sounds like ks. ([source](${url}): “In English it is pronounced like ks, as in the word box.”)\n- X is about 0.15 percent of the letters in English text. ([source](${url}): “Of the letters in English text, about 0.15 percent are an X.”)\n- Watch: Whether Y follows.\n`,
+  );
+  assert.match(
+    fs.readFileSync(path.join(cfg.workspace, "news/index.md"), "utf8"),
+    /- \[Find what X is\]\(stories\/letter-x\.md\), updated /,
+  );
 
   // The lead's prompt: the goal, the board, the task workers — built fresh.
   const lead = model.requests[0] ?? [];
   assert.match(
     String(lead[1]?.content),
-    /^## Goal\n\nFollow what is happening in the world[\s\S]*## Task workers\n\n- feeds \(r1[\s\S]*- research \(r1/,
+    /^## Goal\n\nFollow what is happening in the world[\s\S]*## Task workers\n\n- feeds \(r1[\s\S]*- research \(r1[\s\S]*## Files changed lately\n\nNone yet\./,
   );
   // The research agent's context: its own prompt, nothing of the lead's.
   const research = model.requests.find((r) => system({ messages: r }).startsWith("You are a research worker")) ?? [];
-  assert.match(String(research[1]?.content), /^Task #1: Find what X is\n\nWrite research\/x\.md\./);
+  assert.match(String(research[1]?.content), /^Task #1: Find what X is\n\nstory: letter-x$/);
 
   const seen = events(five);
   const runs = seen
@@ -664,7 +732,7 @@ test("the lead posts a task; the research worker does it through five.llm.agent,
     .map((e) => e.type === "run_started" && `${e.run}:${e.worker}`);
   assert.deepEqual(runs, ["1:lead", "2:research"]);
   const work = seen.filter((e) => e.run === 2).map((e) => (e.type === "tool" ? `tool:${e.name}` : e.type));
-  assert.deepEqual(work, ["run_started", "model", "tool:write_file", "model", "task", "run_ended"]);
+  assert.deepEqual(work, ["run_started", "model", "tool:fetch_url", "model", "model", "task", "run_ended"]);
   const ended = seen.find((e) => e.type === "run_ended" && e.run === 2);
   assert.equal(ended?.type === "run_ended" && ended.outcome, "done");
   // The worker's code ran as a process of its run.
@@ -672,12 +740,31 @@ test("the lead posts a task; the research worker does it through five.llm.agent,
   assert.deepEqual([proc?.label, proc?.run, proc?.state], ["worker research", 2, "ok"]);
 });
 
-test("define_worker: tried on a trial task first, refused for five's own workers; then it does a task", async () => {
+test("a date that has not come yet is refused in a task and a path", async () => {
+  const { five } = make([
+    { calls: [["post_task", { worker: "feeds", title: "Digest for 2099-12-31" }]] },
+    { calls: [["write_file", { path: "news/2099-12-31.md", content: "x" }]] },
+    { content: "ok" },
+  ]);
+  const d = five.five.d;
+  const run = new Run({ n: d.state.nextRun(), worker: "lead", kind: "lead", log: noopLogger, emit: d.emit });
+  const tools = [...boardTools(d, "lead"), ...workspaceTools(d)];
+  await runScope.run(run, () =>
+    runAgent(d, run, { system: "You are a test.", messages: [{ role: "user", content: "go" }], tools }),
+  );
+  const results = events(five).flatMap((e) => (e.type === "tool" ? [e.result] : []));
+  assert.equal(results.length, 2);
+  for (const r of results) assert.match(r, /^error: 2099-12-31 has not come yet: today is \d{4}-\d\d-\d\d\./);
+  assert.equal(five.five.board.counts().open, 0);
+});
+
+test("define_worker: tried on a trial task first, refused for five's own workers and for a worker that works; then it does a task", async () => {
   const code = `export default async ({ task }) => {
   const out = await five.llm.ask("Count the words: " + task.input, { schema: { type: "object", properties: { n: { type: "integer" } }, required: ["n"] } });
   fs.writeFileSync("count.txt", String(out.n));
-  return "counted " + out.n;
+  return "counted " + out.n + " words, in count.txt";
 };`;
+  const said = 'export default async () => "did nothing, and said so in words";';
   const { five, model, cfg } = make((req) => {
     const sys = system(req);
     const steps = req.messages.filter((m) => m.role === "assistant").length;
@@ -685,14 +772,41 @@ test("define_worker: tried on a trial task first, refused for five's own workers
       if (steps === 0) {
         return {
           calls: [
-            ["define_worker", { name: "chat", description: "mine", code }],
-            ["define_worker", { name: "count", description: "Counts words.", code: "export const x = 1;" }],
+            ["define_worker", { name: "chat", description: "mine", code, test_input: "x" }],
+            [
+              "define_worker",
+              { name: "count", description: "Counts words.", code: "export const x = 1;", test_input: "x" },
+            ],
             [
               "define_worker",
               { name: "count", description: "Counts words. Input: the text.", code, test_input: "a b c" },
             ],
             ["post_task", { worker: "count", title: "Count", input: "one two" }],
-            ["define_worker", { name: "count", description: "Counts.", code }],
+            ["define_worker", { name: "count", description: "Counts.", code, test_input: "x" }],
+            [
+              "define_worker",
+              { name: "empty", description: "Nothing.", code: "export default async () => {}", test_input: "x" },
+            ],
+            [
+              "define_worker",
+              {
+                name: "stub",
+                description: "Nothing.",
+                code: "export default async () => ({ done: true })",
+                test_input: "x",
+              },
+            ],
+            [
+              "define_worker",
+              {
+                name: "oops",
+                description: "Fails.",
+                code: 'export default async () => ({ error: "ENOENT: no such file, news/x.md" })',
+                test_input: "x",
+              },
+            ],
+            ["define_worker", { name: "fifth", description: "Talks.", code: said, test_input: "x" }],
+            ["define_worker", { name: "sixth", description: "Talks.", code: said, test_input: "x" }],
           ],
         };
       }
@@ -706,14 +820,24 @@ test("define_worker: tried on a trial task first, refused for five's own workers
   five.five.settings.update({ minOpenTasks: 0 });
   five.five.start();
   await until(() => five.five.board.counts().done === 1, "the count task");
+  await until(() => model.requests.some((r) => r.some((m) => m.role === "tool")), "the lead's second call");
   five.five.pause();
   const lead = model.requests.find((r) => r.some((m) => m.role === "tool")) ?? [];
   const results = lead.filter((m) => m.role === "tool").map((m) => m.content);
   assert.match(results[0] ?? "", /^error: "chat" is one of five's own workers/);
   assert.match(results[1] ?? "", /^not saved: the code needs `export default/);
-  assert.match(results[2] ?? "", /^saved worker count \(revision 1\)[\s\S]*trial result:\ncounted 3/);
-  assert.match(results[4] ?? "", /^not saved: count exists and works; a revision needs test_input/);
-  assert.equal((five.five.board.list()[0] as Task).result, "counted 2");
+  assert.match(
+    results[2] ?? "",
+    /^saved worker count \(revision 1\)[\s\S]*trial result:\ncounted 3 words, in count\.txt\nThe trial wrote count\.txt \(on a copy of the workspace, now gone\)\./,
+  );
+  // A worker that works is not rewritten; one that returns nothing fails its trial.
+  assert.match(results[4] ?? "", /^not saved: count works — 0 tasks done, none of its latest failed/);
+  assert.match(results[5] ?? "", /^not saved: the trial failed\nthe worker returned nothing/);
+  assert.match(results[6] ?? "", /^not saved: the trial failed\nthe worker's result says nothing \(\{/);
+  assert.match(results[7] ?? "", /^not saved: the trial failed\nthe worker returned an error: ENOENT/);
+  assert.match(results[8] ?? "", /^saved worker fifth/);
+  assert.match(results[9] ?? "", /^not saved: five keeps at most 4 task workers — count \(1 done/);
+  assert.equal((five.five.board.list()[0] as Task).result, "counted 2 words, in count.txt");
   assert.equal(fs.readFileSync(path.join(cfg.workspace, "count.txt"), "utf8"), "2");
   const asked = events(five).find((e) => e.type === "model" && e.prompt);
   assert.equal(asked?.type === "model" && asked.prompt, "Count the words: a b c");
@@ -728,6 +852,7 @@ test("define_worker: tried on a trial task first, refused for five's own workers
         "chat:chat:true:-:0",
         "count:task:false:1:1",
         "feeds:task:false:1:0",
+        "fifth:task:false:1:0",
         "research:task:false:1:0",
       ],
     );
@@ -865,6 +990,46 @@ test("the API: status, the board, settings, the goal, the inbox, and a reset", a
   }
 });
 
+test("five posts a feeds task on time, and the lead of a new five waits for the first result", async () => {
+  const { five } = make(() => ({ content: "ok" }), { FIVE_FEEDS_EVERY: "900" });
+  five.five.settings.update({ taskRuns: 0, minOpenTasks: 0 });
+  five.five.start();
+  await new Promise((r) => setTimeout(r, 200));
+  five.five.pause();
+  // Nothing has ended yet, so the lead has nothing to plan from: it has not run.
+  assert.ok(!events(five).some((e) => e.type === "run_started"));
+  // One task, by five: the next waits for it to end and its time to come.
+  assert.deepEqual(
+    five.five.board.list().map((t) => [t.worker, t.title, t.postedBy]),
+    [["feeds", "Read the news feeds", "five"]],
+  );
+});
+
+test("the lead plans on its own model when it has one; the workers use theirs", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "five-test-"));
+  const cfg = loadConfig({ FIVE_WORKSPACE: dir, FIVE_TICK_MS: "20", FIVE_FEEDS_EVERY: "0", FIVE_LEAD_MODEL: "big" });
+  assert.equal(cfg.leadModel, "big");
+  const workers = scripted(() => ({ content: "Done with the test." }));
+  const lead = scripted(() => ({ content: "Nothing to plan." }));
+  const five = createFive(cfg, workers, noopLogger, lead);
+  open.push(five);
+  five.five.settings.update({ minOpenTasks: 0 });
+  five.five.start();
+  await until(() => events(five).some((e) => e.type === "run_ended"), "the lead's run");
+  five.five.pause();
+  await agent(five);
+  // Its run, and the reminder to keep its notes: it kept none.
+  assert.deepEqual(
+    [lead.requests.length, system({ messages: lead.requests[0] ?? [] }).startsWith("You are the lead")],
+    [2, true],
+  );
+  assert.match(String(lead.requests[1]?.at(-1)?.content), /^\[five\] You did not update your notes/);
+  assert.deepEqual(
+    workers.requests.map((r) => system({ messages: r })),
+    ["You are a test."],
+  );
+});
+
 test("the seed task workers are modules with a default export", async () => {
   const { transformSync } = await import("esbuild");
   const { SEEDS } = await import("../src/workers/seeds.ts");
@@ -889,4 +1054,58 @@ test("write_file does not replace a file unless asked to, and every agent is tol
   assert.equal(fs.readFileSync(path.join(cfg.workspace, "news/day.md"), "utf8"), "mine");
   const first = model.requests[0]?.[0];
   assert.match(String(first?.content), /^Today is \w+day, \d{4}-\d\d-\d\d \(UTC\)\.[^\n]*\n\nYou are a test\./);
+});
+
+test("history: a failed run's changes are put back; a version can be read and restored", async () => {
+  const { five, cfg } = make([]);
+  const ws = (p: string) => path.join(cfg.workspace, p);
+  fs.mkdirSync(ws("news"));
+  fs.writeFileSync(ws("news/a.md"), "good");
+  const w = five.five.d.workers;
+  w.save({
+    name: "breaker",
+    description: "Breaks things.",
+    deps: {},
+    source:
+      'import { writeFileSync } from "node:fs";\nexport default async () => { writeFileSync("news/a.md", "broken"); fs.writeFileSync("news/b.md", "new"); throw new Error("oops"); };',
+  });
+  w.save({
+    name: "writer",
+    description: "Writes.",
+    deps: {},
+    source:
+      'export default async () => { fs.appendFileSync("news/a.md", " and more"); return "appended to news/a.md"; };',
+  });
+  five.five.settings.update({ minOpenTasks: 0 });
+  five.five.post({ worker: "breaker", title: "Break", input: "" });
+  five.five.start();
+  await until(() => five.five.board.counts().failed === 1, "the breaker to fail");
+  const failed = five.five.board.list()[0] as Task;
+  assert.match(failed.error ?? "", /oops[\s\S]*\[five put back the files it changed: news\/a\.md, news\/b\.md\]/);
+  assert.equal(fs.readFileSync(ws("news/a.md"), "utf8"), "good");
+  assert.ok(!fs.existsSync(ws("news/b.md")));
+
+  five.five.post({ worker: "writer", title: "Write", input: "" });
+  await until(() => five.five.board.counts().done === 1, "the writer");
+  five.five.pause();
+  assert.equal(fs.readFileSync(ws("news/a.md"), "utf8"), "good and more");
+
+  const { server, call, base } = await serve(five, cfg);
+  try {
+    const h = (await call<FileHistory>("GET", "/workspace/history?path=news/a.md")).body;
+    assert.deepEqual(
+      h.versions.map((v) => `${v.by}:${v.bytes}:${v.restored ?? false}`),
+      ["writer:4:false", "breaker:4:true"],
+    );
+    const id = h.versions[0]?.id ?? "";
+    assert.equal(await (await fetch(`${base}/workspace/history/file?path=news/a.md&id=${id}`)).text(), "good");
+    assert.equal((await call("POST", "/workspace/history/restore", { path: "news/a.md", id })).status, 200);
+    assert.equal(fs.readFileSync(ws("news/a.md"), "utf8"), "good");
+    // Restoring kept what it replaced: it can be undone.
+    const after = (await call<FileHistory>("GET", "/workspace/history?path=news/a.md")).body;
+    assert.deepEqual([after.versions[0]?.by, after.versions[0]?.bytes], ["person", 13]);
+    assert.equal((await call("POST", "/workspace/history/restore", { path: "../x", id })).status, 404);
+  } finally {
+    server.close();
+  }
 });

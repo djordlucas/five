@@ -7,6 +7,7 @@ import { createRequire } from "node:module";
 import * as path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
+import { keepWrites } from "./keep.ts";
 
 export type ToChild =
   | { type: "start"; file: string; args: unknown }
@@ -16,6 +17,9 @@ export type ToParent =
   | { type: "call"; id: number; name: string; args: unknown[] }
   | { type: "result"; ok: true; json: string }
   | { type: "result"; ok: false; error: string };
+
+// A run whose changes five keeps: every write to the workspace is kept first.
+if (process.env.FIVE_KEEP_DIR) keepWrites(process.cwd(), process.env.FIVE_KEEP_DIR);
 
 const send = (m: ToParent) => process.send?.(m);
 const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();

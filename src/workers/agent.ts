@@ -33,6 +33,13 @@ export function today(): string {
   return `Today is ${day}, ${now.toISOString().slice(0, 10)} (UTC). Use this date; never guess another.`;
 }
 
+/** A date in the text later than today, which a small model has guessed: say so, or nothing. */
+export function futureDate(text: string): string | undefined {
+  const now = new Date().toISOString().slice(0, 10);
+  const later = text.match(/\b20\d\d-[01]\d-[0-3]\d\b/g)?.find((day) => day > now);
+  return later && `${later} has not come yet: today is ${now}. Leave dates out — five and its workers add today's.`;
+}
+
 export interface AgentTool extends ToolDef {
   run(args: Record<string, unknown>, run: Run): Promise<string>;
 }
@@ -84,7 +91,9 @@ export async function runAgent(d: Deps, run: Run, o: AgentOptions): Promise<Agen
     const stepLog = run.log.child({ step });
     run.setLive("queued");
     const t0 = performance.now();
-    const { completion, waitedMs } = await d.pool.complete(
+    // The lead plans on its own model, when it has one; what its trials run uses the workers'.
+    const pool = run.kind === "lead" && d.leadPool ? d.leadPool : d.pool;
+    const { completion, waitedMs } = await pool.complete(
       {
         messages: [{ role: "system", content: `${today()}\n\n${o.system}` }, ...o.messages],
         ...(defs.length > 0 && { tools: defs }),

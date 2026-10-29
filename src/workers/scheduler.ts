@@ -14,6 +14,7 @@ import type { LibraryStore } from "../tools/libs.ts";
 import type { ToolStore } from "../tools/store.ts";
 import { Board, clip } from "./board.ts";
 import { ChatSession, chatForLead } from "./chat.ts";
+import { History } from "./history.ts";
 import { runLead } from "./lead.ts";
 import { ModelPool } from "./pool.ts";
 import { type Deps, Run, runScope } from "./run.ts";
@@ -22,6 +23,8 @@ import { type Settings, SettingsStore } from "./settings.ts";
 import { WorkerStore } from "./store.ts";
 import { runWorker } from "./task.ts";
 
+/** The worker five posts a task for every feedsEverySeconds. */
+const FEEDS = "feeds";
 /** The lead runs at most this often for a board running low. */
 const LEAD_COOLDOWN_MS = 30_000;
 /** The longest a status shows of a reply in progress. */
@@ -36,6 +39,8 @@ export interface SchedulerOptions {
   runner: Runner;
   runs: RunTable;
   model: ChatModel;
+  /** The lead's own model: its calls go to it, one at a time, besides the others' slots. */
+  leadModel?: ChatModel;
   workspace: string;
   settings: Settings;
   /** How often the loop looks for work. */
@@ -86,8 +91,10 @@ export class Scheduler {
       runner: o.runner,
       runs: o.runs,
       pool: this.pool,
+      ...(o.leadModel && { leadPool: new ModelPool(o.leadModel, () => 1) }),
       settings: this.settings,
       workspace: o.workspace,
+      history: new History(o.workspace, log),
       log,
       emit,
       goal: () => o.state.getMeta("goal") || SEED_GOAL,
@@ -250,9 +257,12 @@ export class Scheduler {
     const runs = [...this.active.values()].map((a) => a.run);
     const leading = runs.some((r) => r.kind === "lead");
     const now = Date.now();
+    this.readFeeds(s, now);
     const counts = this.board.counts();
-    const low = counts.open < s.minOpenTasks && now - this.lastLead >= LEAD_COOLDOWN_MS;
-    const due = now - this.lastLead >= s.leadEverySeconds * 1000;
+    // A new five's lead waits for its workers' first results, to plan from them rather than from memory.
+    const ready = counts.done + counts.failed > 0 || counts.running + counts.open === 0;
+    const low = ready && counts.open < s.minOpenTasks && now - this.lastLead >= LEAD_COOLDOWN_MS;
+    const due = this.lastLead ? now - this.lastLead >= s.leadEverySeconds * 1000 : ready;
     if (!leading && (low || due || (this.leadWanted && now - this.lastLead >= 5_000))) this.startLead();
 
     let tasks = runs.filter((r) => r.kind === "task").length;
@@ -262,6 +272,17 @@ export class Scheduler {
       tasks++;
       this.startTask(task.run, task);
     }
+  }
+
+  /** The feeds, read on time: a task for the feeds worker when it has none and its last is old enough. */
+  private readFeeds(s: Settings, now: number): void {
+    if (!s.feedsEverySeconds || !this.workers.get(FEEDS)) return;
+    const last = this.board.latest(FEEDS);
+    if (last && (last.status === "open" || last.status === "running")) return;
+    if (last && now - Date.parse(last.createdAt) < s.feedsEverySeconds * 1000) return;
+    const t = { worker: FEEDS, title: "Read the news feeds", input: "" };
+    const task = this.board.post({ ...t, by: "five" });
+    this.emit({ type: "task", action: "posted", id: task.id, worker: FEEDS, title: t.title, by: "five" });
   }
 
   private startLead(): void {
@@ -322,6 +343,9 @@ export class Scheduler {
       }
       this.active.delete(run.n);
       run.live = undefined;
+      // A failed run's changes to the workspace are put back.
+      const back = this.d.history?.end(run, outcome) ?? [];
+      if (back.length) error = `${error ?? outcome}\n[five put back the files it changed: ${back.join(", ")}]`;
       if (run.task) {
         // Five stopping: the task waits on the board for the next start.
         if (this.closing && outcome === "stopped") this.board.reopen(run.task.id);

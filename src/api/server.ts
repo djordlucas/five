@@ -22,6 +22,7 @@ import type {
   BoardPage,
   ErrorBody,
   EventsPage,
+  FileHistory,
   InboxMessage,
   InboxPage,
   LibraryDetail,
@@ -120,6 +121,7 @@ export function createApi(opts: ApiOptions): http.Server {
     const s = five.status();
     return {
       model: cfg.model,
+      ...(cfg.leadModel && { leadModel: cfg.leadModel }),
       endpoint: cfg.endpoint,
       contextTokens: cfg.contextTokens,
       think: cfg.think,
@@ -420,6 +422,49 @@ export function createApi(opts: ApiOptions): http.Server {
   route("DELETE", "/api/v1/workspace/file", ({ query, headers }) => {
     workspace.remove(wsPath(query), ifMatch(headers));
     return { deleted: wsPath(query) };
+  });
+  // A file's history: what it was before each run that changed it.
+  const history = () => {
+    const h = app.five.d.history;
+    if (!h) throw new HttpError(404, "five keeps no history");
+    return h;
+  };
+  const versionId = (v: unknown) => {
+    if (typeof v !== "string" || !/^(run|person)-\d+$/.test(v))
+      throw new HttpError(400, "id is run-<n> or person-<ms>");
+    return v;
+  };
+  const kept = <T>(fn: () => T): T => {
+    try {
+      return fn();
+    } catch (err) {
+      if (err instanceof HttpError) throw err;
+      throw new HttpError(404, err instanceof Error ? err.message : String(err));
+    }
+  };
+  route(
+    "GET",
+    "/api/v1/workspace/history",
+    ({ query }): FileHistory => ({
+      path: wsPath(query),
+      versions: kept(() => history().versions(wsPath(query))),
+    }),
+  );
+  route("GET", "/api/v1/workspace/history/file", ({ query }) => {
+    const bytes = kept(() => history().read(wsPath(query), versionId(query.get("id"))));
+    const shown = SHOWN[path.extname(wsPath(query)).toLowerCase()];
+    return new Raw(
+      {
+        "content-type": shown ?? "application/octet-stream",
+        ...(shown !== "application/pdf" && { "content-security-policy": "sandbox" }),
+      },
+      bytes,
+    );
+  });
+  route("POST", "/api/v1/workspace/history/restore", ({ body }) => {
+    const file = typeof body.path === "string" ? body.path : "";
+    kept(() => history().restore(file, versionId(body.id)));
+    return { restored: file, id: body.id };
   });
   route("GET", "/api/v1/workspace/db/tables", ({ query }) => ({ tables: workspace.tables(wsPath(query)) }));
   route("GET", "/api/v1/workspace/db/rows", ({ query }) =>

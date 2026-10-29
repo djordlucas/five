@@ -14,12 +14,13 @@ import {
   startGenerated,
 } from "../agent/builtins/index.ts";
 import { mediaToolsByName } from "../agent/media.ts";
+import type { Task } from "../api/types.ts";
 import { Workspace, WorkspaceError } from "../api/workspace.ts";
-import type { AgentTool } from "./agent.ts";
+import { type AgentTool, futureDate } from "./agent.ts";
 import { MAX_INPUT, MAX_TITLE } from "./board.ts";
 import type { Deps, Run } from "./run.ts";
 import { FIXED } from "./store.ts";
-import { fetchText, formatResults, searchWeb } from "./web.ts";
+import { fetchText, formatResults, pageKey, searchWeb } from "./web.ts";
 
 /** Who calls tools, in run histories. */
 export const AGENT_ID = "five";
@@ -83,8 +84,10 @@ export function workspaceTools(d: Deps): AgentTool[] {
         },
         required: ["path", "content"],
       },
-      run: (a) =>
+      run: (a, run) =>
         guard(() => {
+          const later = futureDate(str(a.path));
+          if (later) return `error: ${later}`;
           const w = ws();
           if (a.replace !== true) {
             try {
@@ -94,6 +97,7 @@ export function workspaceTools(d: Deps): AgentTool[] {
               if (!(err instanceof WorkspaceError && err.status === 404)) throw err;
             }
           }
+          d.history?.before(run.n, str(a.path));
           const e = w.write(str(a.path), Buffer.from(str(a.content)));
           return `wrote ${e.path} (${e.bytes} bytes)`;
         }),
@@ -107,7 +111,7 @@ export function workspaceTools(d: Deps): AgentTool[] {
         properties: { path: { type: "string" }, content: { type: "string" } },
         required: ["path", "content"],
       },
-      run: (a) =>
+      run: (a, run) =>
         guard(() => {
           const w = ws();
           let before = "";
@@ -118,6 +122,7 @@ export function workspaceTools(d: Deps): AgentTool[] {
           }
           const sep = before && !before.endsWith("\n") ? "\n" : "";
           const add = str(a.content);
+          d.history?.before(run.n, str(a.path));
           const e = w.write(str(a.path), Buffer.from(before + sep + (add.endsWith("\n") ? add : `${add}\n`)));
           return `appended to ${e.path} (${e.bytes} bytes now)`;
         }),
@@ -150,15 +155,30 @@ export function webTools(): AgentTool[] {
       description:
         "Get a web page as plain text, or a feed (RSS, Atom) as its list of items. A long page is kept whole in a file, and you get its start.",
       parameters: { type: "object", properties: { url: { type: "string" } }, required: ["url"] },
-      run: async (a, run) => fetchText(str(a.url), run.signal),
+      run: async (a, run) => {
+        const text = await fetchText(str(a.url), run.signal);
+        remember(run, str(a.url), text);
+        return text;
+      },
     },
     {
       name: "search_web",
       description: "Search the web: the top results, each with its title, URL and a snippet.",
       parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
-      run: async (a, run) => formatResults(str(a.query), await searchWeb(str(a.query), run.signal)),
+      run: async (a, run) => {
+        const results = await searchWeb(str(a.query), run.signal);
+        for (const r of results) remember(run, r.url, `${r.title}\n${r.snippet}`);
+        return formatResults(str(a.query), results);
+      },
     },
   ];
+}
+
+/** Keep what a run read at a URL, after what it read there before. */
+function remember(run: Run, url: string, text: string): void {
+  const key = pageKey(url);
+  const before = run.read.get(key);
+  run.read.set(key, { url: before?.url ?? url, text: before ? `${before.text}\n${text}` : text });
 }
 
 /** Post, read and cancel tasks; `by` is who posts. */
@@ -188,8 +208,12 @@ export function boardTools(d: Deps, by: string): AgentTool[] {
         if (title.length > MAX_TITLE)
           return `error: a title is at most ${MAX_TITLE} characters; put the rest in the input`;
         const input = str(a.input);
+        const later = futureDate(`${title}\n${input}`);
+        if (later) return `error: ${later}`;
         if (input.length > MAX_INPUT)
           return `error: an input is at most ${MAX_INPUT} characters; put long data in a file and name it`;
+        const same = d.board.alike({ worker, title, input });
+        if (same) return `not posted: ${sameTask(same)}`;
         const task = d.board.post({ worker, title, input, by });
         run.emit({ type: "task", action: "posted", id: task.id, worker, title, by });
         return `posted task #${task.id} for ${worker}.`;
@@ -225,6 +249,12 @@ export function boardTools(d: Deps, by: string): AgentTool[] {
       },
     },
   ];
+}
+
+/** Why a task like `t` is not posted again. */
+export function sameTask(t: Task): string {
+  const state = t.status === "done" ? "was just done" : `is ${t.status}`;
+  return `#${t.id} ${t.worker}: "${t.title}" ${state} — the same work. Post something else, or read its result.`;
 }
 
 export function goalTool(d: Deps, by: string): AgentTool {

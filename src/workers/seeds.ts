@@ -1,106 +1,25 @@
 // The task workers a new five starts with, so it works from its first minute.
 // They are ordinary task workers: the lead reads, revises and replaces them
-// like its own. Each shows a way to write one — `research` hands the task to a
-// small agent, `feeds` is code that asks the model only what needs judgment.
+// like its own. Each shows a way to write one — `feeds` is code that asks the
+// model only what needs judgment; `research` has a small agent find and quote
+// sources, then checks the quotes in code. Their sources are in seeds/.
+
+import * as fs from "node:fs";
+
+const source = (name: string) => fs.readFileSync(new URL(`./seeds/${name}.js`, import.meta.url), "utf8");
 
 export const SEEDS: { name: string; description: string; source: string }[] = [
   {
     name: "research",
     description:
-      "Does one research task with a small agent: searches the web, reads pages, and writes what it finds, with sources, to files. Title: what to find out. Input: the details, and the file to write (research/<topic>.md when none is named). Result: what it found, in a few lines, and the files it wrote.",
-    source: `// One research task, done by a small agent with the web and file tools.
-export default async ({ task }) =>
-  five.llm.agent({
-    system:
-      "You are a research worker of five. Do the one task you are given: search the web, read the pages that matter, " +
-      "and write what you find to the file the task names (research/<topic>.md when it names none; never news/<date>.md, the digest is the feeds worker's), " +
-      "citing each source's URL. Write only what your sources say. Keep it short. " +
-      "When done, reply with a short result: what you found, in a few lines, and the files you wrote.",
-    prompt: \`Task #\${task.id}: \${task.title}\\n\\n\${task.input}\`,
-    tools: ["search_web", "fetch_url", "read_file", "write_file", "append_file", "list_files"],
-  });
-`,
+      "Researches one news story with a small agent, and adds what it finds to the story's file, news/stories/<slug>.md, under today's date — only the facts whose quoted sentence code finds in the pages the agent read — then updates news/index.md. Title: what to find out. Input: the details, and `story: <slug>` to add to a story already followed (it picks or starts one otherwise). Result: how many checked facts it added, how many it dropped, and the file.",
+    source: source("research"),
   },
   {
     name: "feeds",
     description:
-      "Reads news feeds (RSS, Atom), keeps the items it has not seen before, asks the model which matter, and appends those — one factual line each, with the link — to today's digest, news/<YYYY-MM-DD>.md. Input: feed URLs, in any form; the default world-news feeds when it names none, or when none of the named ones work. Result: how many items were new and how many were added.",
-    source: `// News feeds into today's digest. Code fetches, parses and remembers what it
-// has seen; the model only picks what matters, in small batches.
-const DEFAULT_FEEDS = [
-  "https://feeds.bbci.co.uk/news/world/rss.xml",
-  "https://www.theguardian.com/world/rss",
-  "https://www.aljazeera.com/xml/rss/all.xml",
-  "https://feeds.npr.org/1004/rss.xml",
-];
-const SEEN = "news/seen.json";
-const BATCH = 15;
-
-export default async ({ task }) => {
-  // URLs in any form: one per line, or joined with commas or semicolons.
-  const given = [...new Set(task.input.match(/https?:\\/\\/[^\\s,;<>"'()\\[\\]]+/g) ?? [])];
-  fs.mkdirSync("news", { recursive: true });
-  const seen = new Set(fs.existsSync(SEEN) ? JSON.parse(fs.readFileSync(SEEN, "utf8")) : []);
-  const fresh = [];
-  const failed = [];
-  const read = async (urls) => {
-    for (const url of urls) {
-      try {
-        for (const item of await five.web.feed(url)) {
-          if (!item.link || seen.has(item.link) || fresh.some((f) => f.link === item.link)) continue;
-          fresh.push({ ...item, source: new URL(url).hostname.replace(/^(www|feeds|rss)\\./, "") });
-        }
-      } catch (err) {
-        failed.push(\`\${url}: \${err.message}\`);
-      }
-    }
-  };
-  let feeds = given.length ? given : DEFAULT_FEEDS;
-  await read(feeds);
-  // None of the named feeds worked: the defaults do.
-  const extra = DEFAULT_FEEDS.filter((u) => !given.includes(u));
-  if (given.length && failed.length === given.length && extra.length) {
-    feeds = [...given, ...extra];
-    await read(extra);
-  }
-  const failures = failed.length ? \` Failed: \${failed.join("; ")}\` : "";
-  if (!fresh.length) return \`No new items in \${feeds.length} feeds.\${failures}\`;
-
-  const picked = [];
-  for (let i = 0; i < fresh.length; i += BATCH) {
-    const batch = fresh.slice(i, i + BATCH);
-    const list = batch.map((it, n) => \`\${n}. \${it.title}\${it.summary ? \` — \${it.summary.slice(0, 160)}\` : ""}\`).join("\\n");
-    const out = await five.llm.ask(
-      \`Headlines:\\n\${list}\\n\\nWhich of these are significant world news? For each, give its number and one factual line on what happened, from the headline and summary only.\`,
-      {
-        system: "You pick significant world news from headlines. Be factual and brief. Skip opinion, sport and entertainment.",
-        schema: {
-          type: "object",
-          properties: {
-            items: {
-              type: "array",
-              items: { type: "object", properties: { n: { type: "integer" }, line: { type: "string" } }, required: ["n", "line"] },
-            },
-          },
-          required: ["items"],
-        },
-      },
-    );
-    for (const p of out.items ?? []) {
-      const it = batch[p.n];
-      if (it) picked.push({ ...it, line: p.line });
-    }
-  }
-  const day = new Date().toISOString().slice(0, 10);
-  const file = \`news/\${day}.md\`;
-  if (!fs.existsSync(file)) fs.writeFileSync(file, \`# News, \${day}\\n\\n\`);
-  fs.appendFileSync(file, picked.map((p) => \`- \${p.line} — [\${p.source}](\${p.link})\\n\`).join(""));
-  // Seen only once the model has been through them: a failed run leaves them for the next.
-  for (const it of fresh) seen.add(it.link);
-  fs.writeFileSync(SEEN, JSON.stringify([...seen].slice(-5000)));
-  return \`\${fresh.length} new items from \${feeds.length} feeds; \${picked.length} added to \${file}.\${failures}\`;
-};
-`,
+      'Reads world-news feeds (RSS, Atom), keeps the items it has not seen before, asks the model which matter, and appends those — one factual line each, with the link — to today\'s digest, news/<YYYY-MM-DD>.md; it posts research tasks for the weightiest. Five posts it a task every few minutes. Leave the input empty: its default feeds work. "Up to date" means nothing new since the last run, which is normal. Result: how many items were new and how many were added.',
+    source: source("feeds"),
   },
 ];
 
