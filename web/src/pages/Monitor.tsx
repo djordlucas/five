@@ -40,10 +40,10 @@ export function Monitor() {
         <p class="muted">
           {list === null
             ? 'Loading…'
-            : `${list.length} child ${list.length === 1 ? 'process' : 'processes'} since five started, one for each tool call that runs code${running ? ` · ${running} live` : ''}`}
+            : `${list.length} child ${list.length === 1 ? 'process' : 'processes'} since five started, one for each task worker's run and each tool call that runs code${running ? ` · ${running} live` : ''}`}
         </p>
         {error && <p class="error">{error}</p>}
-        {list?.length === 0 && <p class="muted">None yet: the agent has not run any code.</p>}
+        {list?.length === 0 && <p class="muted">None yet: no worker or tool has run code.</p>}
         <ul class={split.entries}>
           {list?.map((p) => (
             <li key={p.id}>
@@ -69,9 +69,10 @@ export function Monitor() {
           <Detail key={open} id={open} tick={tick} />
         ) : (
           <p class="card muted">
-            Each tool call that runs code — run_js, a tool the agent built, a define_tool trial, a background run — starts a
-            Node.js child process of its own, with all of Node and no permission model. Choose one to see its code,
-            arguments, output and result. Kept in memory: a restart of five starts the list over.
+            Each task worker runs its task in a Node.js child process of its own, as does each tool call that runs code —
+            run_js, a tool the agent built, a define_tool or define_worker trial, a background run — with all of Node and
+            no permission model. Choose one to see its code, arguments, output and result. Kept in memory: a restart of
+            five starts the list over.
           </p>
         )}
       </section>
