@@ -648,6 +648,7 @@ test("the MLX client: streamed tool calls in pieces, the tool's reply by call id
       { choices: [], usage: { prompt_tokens: 9, completion_tokens: 4 } },
     ],
     [{ choices: [{ delta: { content: 'Sure:\n```json\n{"ok": true}\n```' }, finish_reason: "stop" }] }],
+    [],
   ];
   const server = http.createServer(async (req, res) => {
     let text = "";
@@ -690,6 +691,8 @@ test("the MLX client: streamed tool calls in pieces, the tool's reply by call id
     assert.match(sent[0]?.content ?? "", /^S\n\nReply with only JSON that matches this JSON Schema/);
     assert.equal(sent[2]?.thinking, undefined);
     assert.equal(sent[3]?.tool_call_id, "c1");
+
+    await assert.rejects(client.complete({ messages: [{ role: "user", content: "hi" }] }), /ended before it began/);
   } finally {
     server.close();
   }

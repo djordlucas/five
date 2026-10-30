@@ -168,12 +168,14 @@ export class Mlx implements ChatModel {
 async function read(res: Response, onProgress?: CompletionRequest["onProgress"]): Promise<Raw> {
   const out: Raw = { content: "", reasoning: "", calls: [], prompt: 0, completion: 0 };
   const byIndex = new Map<number, Raw["calls"][number]>();
+  let choices = 0;
   const add = (line: string) => {
     const data = line.startsWith("data:") ? line.slice(5).trim() : line.trim();
     if (!data || data === "[DONE]" || line.startsWith(":")) return;
     const chunk = JSON.parse(data) as Chunk;
     if (chunk.error) throw new Error(`mlx: ${typeof chunk.error === "string" ? chunk.error : chunk.error.message}`);
     for (const choice of chunk.choices ?? []) {
+      choices++;
       const d = choice.delta ?? choice.message ?? {};
       if (d.content) out.content += d.content;
       if (d.reasoning) out.reasoning += d.reasoning;
@@ -206,6 +208,8 @@ async function read(res: Response, onProgress?: CompletionRequest["onProgress"])
     onProgress?.({ thinking: out.reasoning, content: out.content });
   }
   add(rest + decoder.decode());
+  // A server whose generation died mid-reply ends the stream with nothing in it.
+  if (!choices) throw new Error("mlx: the reply ended before it began");
   return out;
 }
 
