@@ -2,15 +2,20 @@
 // present; the container sets the same variables.
 
 import * as path from "node:path";
+import { MLX_ENDPOINT } from "./llm/mlx.ts";
 import { OLLAMA_ENDPOINT } from "./llm/ollama.ts";
 import { type Level, parseLevel } from "./log.ts";
 import { DEFAULTS, type Settings } from "./workers/settings.ts";
 
 export interface Config {
+  /** Which server runs the models: Ollama, or MLX's (one server per model). */
+  llm: "ollama" | "mlx";
   model: string;
   /** The lead's model, when it is not `model`: a bigger one plans while small ones work. Empty: `model`. */
   leadModel: string;
   endpoint: string;
+  /** MLX: the lead's own server, when it has its own model. */
+  leadEndpoint: string;
   /** The context window of each of the model's slots (num_ctx), in tokens. */
   contextTokens: number;
   /** How long Ollama keeps the model loaded after a call; empty for Ollama's default. */
@@ -43,10 +48,14 @@ export interface Config {
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const workspace = path.resolve(env.FIVE_WORKSPACE ?? process.cwd());
   const home = path.join(workspace, ".five");
+  const llm = env.FIVE_LLM ?? "ollama";
+  if (llm !== "ollama" && llm !== "mlx") throw new Error(`FIVE_LLM must be ollama or mlx, not "${llm}"`);
   return {
+    llm,
     model: env.FIVE_OLLAMA_MODEL ?? "qwen3.5:4b",
     leadModel: env.FIVE_LEAD_MODEL && env.FIVE_LEAD_MODEL !== env.FIVE_OLLAMA_MODEL ? env.FIVE_LEAD_MODEL : "",
-    endpoint: env.FIVE_OLLAMA_ENDPOINT ?? OLLAMA_ENDPOINT,
+    endpoint: llm === "mlx" ? (env.FIVE_MLX_ENDPOINT ?? MLX_ENDPOINT) : (env.FIVE_OLLAMA_ENDPOINT ?? OLLAMA_ENDPOINT),
+    leadEndpoint: env.FIVE_MLX_LEAD_ENDPOINT ?? "http://localhost:8081",
     contextTokens: int(env.FIVE_CONTEXT_TOKENS, 16_384),
     keepAlive: env.FIVE_OLLAMA_KEEP_ALIVE ?? "",
     think: flag(env.FIVE_THINK, "FIVE_THINK"),

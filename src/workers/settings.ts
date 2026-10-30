@@ -15,7 +15,7 @@ export const FIELDS: SettingField[] = [
     label: "Model calls at once",
     min: 1,
     max: 16,
-    help: "Calls sent to the model at the same time; the rest wait, the chat's first. Match Ollama's OLLAMA_NUM_PARALLEL: more than it only queues in Ollama instead.",
+    help: "Calls sent to the model at the same time; the rest wait, the chat's first. Match Ollama's OLLAMA_NUM_PARALLEL, or MLX's --decode-concurrency: more than it only queues in the server instead.",
   },
   {
     key: "taskRuns",

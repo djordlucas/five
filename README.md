@@ -44,6 +44,22 @@ OLLAMA_NUM_PARALLEL=4 OLLAMA_HOST=0.0.0.0 OLLAMA_KEEP_ALIVE=30m ollama serve
 
 With one slot five still works: the calls wait their turn in Ollama.
 
+## Or MLX, on Apple silicon
+
+`FIVE_LLM=mlx` sends the calls to MLX's server (`mlx_lm.server`, a Python
+program run with `uvx`) instead. It decodes concurrent calls together, where
+Ollama's slots mostly take turns: four research calls at once (qwen3.5 4B,
+4-bit, 16 GB M4) took 22 s with MLX against 66 s with Ollama, 69 against 26
+tokens/s. One server runs one model, so a lead with its own model gets its own:
+
+```sh
+make mlx          # the workers' model on :8080 (MLX_MODEL)
+make mlx-lead     # the lead's on :8081 (MLX_LEAD_MODEL), with FIVE_LEAD_MODEL set
+```
+
+MLX loads what it is asked to, without Ollama's check of free memory; it
+cannot constrain a reply to a JSON Schema, so the schema goes in the prompt.
+
 ## Web UI
 
 Preact, with seven's and nine's design tokens, polling the API once a second.
@@ -76,6 +92,9 @@ defaults to; `.env.example` lists every variable:
 | `FIVE_OLLAMA_MODEL` | `qwen3.5:4b` | a pulled model with the tools capability |
 | `FIVE_LEAD_MODEL` | *(the same)* | the lead's own model, such as `qwen3.5:9b`: it plans on it, one call at a time besides the workers' slots; Ollama needs `OLLAMA_MAX_LOADED_MODELS=2` |
 | `FIVE_OLLAMA_ENDPOINT` | `http://localhost:11434` (Docker: `host.docker.internal`) | Ollama |
+| `FIVE_LLM` | `ollama` | `ollama`, or `mlx`: MLX's servers; the model names then only label them |
+| `FIVE_MLX_ENDPOINT` | `http://localhost:8080` (Docker: `host.docker.internal`) | MLX's server for the workers' model |
+| `FIVE_MLX_LEAD_ENDPOINT` | `http://localhost:8081` (Docker: `host.docker.internal`) | MLX's server for the lead's model |
 | `FIVE_CONTEXT_TOKENS` | `16384` | the window of each of the model's slots |
 | `FIVE_THINK` | `off` | let a thinking model think |
 | `FIVE_SLOTS` | `4` | *setting:* model calls at once; match `OLLAMA_NUM_PARALLEL` |
@@ -138,7 +157,7 @@ Workspace paths are relative to the workspace; `..`, a link out of it, and `.fiv
 | `src/workers/tools.ts`, `web.ts` | the tools agents get, and the web as text, feeds and search |
 | `src/agent/` | seven's built-ins, `view_image` and `read_pdf`, the process record, argument checks |
 | `src/runner/`, `src/tools/` | seven's runner and tool store, copied; libraries |
-| `src/llm/` | the Ollama client and text tool-call recovery, from seven |
+| `src/llm/` | the Ollama client and text tool-call recovery, from seven; the MLX client |
 | `src/state.ts` | the SQLite state |
 | `src/api/` | the HTTP API, its shared types, and the workspace's files and databases (`workspace.ts`) |
 | `web/` | the web UI |

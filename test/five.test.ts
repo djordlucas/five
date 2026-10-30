@@ -632,6 +632,69 @@ test("the Ollama client reads a streamed reply as it arrives", async () => {
   }
 });
 
+test("the MLX client: streamed tool calls in pieces, the tool's reply by call id, and JSON cut out of a reply", async () => {
+  const http = await import("node:http");
+  const bodies: Record<string, unknown>[] = [];
+  const replies = [
+    [
+      { choices: [{ delta: { reasoning: "Hm." } }] },
+      {
+        choices: [
+          { delta: { tool_calls: [{ index: 0, id: "c1", function: { name: "add_fact", arguments: '{"fa' } }] } },
+        ],
+      },
+      { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: 'ct":"x"}' } }] } }] },
+      { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
+      { choices: [], usage: { prompt_tokens: 9, completion_tokens: 4 } },
+    ],
+    [{ choices: [{ delta: { content: 'Sure:\n```json\n{"ok": true}\n```' }, finish_reason: "stop" }] }],
+  ];
+  const server = http.createServer(async (req, res) => {
+    let text = "";
+    for await (const piece of req) text += piece;
+    bodies.push(JSON.parse(text));
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    for (const c of replies[bodies.length - 1] ?? []) {
+      res.write(`data: ${JSON.stringify(c)}\n\n`);
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    res.end("data: [DONE]\n\n");
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  try {
+    const { Mlx } = await import("../src/llm/mlx.ts");
+    const port = (server.address() as { port: number }).port;
+    const client = new Mlx({ model: "m", endpoint: `http://127.0.0.1:${port}` });
+    const tools = [{ name: "add_fact", description: "d", parameters: { type: "object" } }];
+    const first = await client.complete({ messages: [{ role: "user", content: "hi" }], tools });
+    assert.deepEqual(first.message.tool_calls, [
+      { id: "c1", type: "function", function: { name: "add_fact", arguments: '{"fact":"x"}' } },
+    ]);
+    assert.equal(first.message.thinking, "Hm.");
+    assert.equal(first.usage?.prompt_tokens, 9);
+    assert.equal(first.finishReason, "tool_calls");
+    assert.equal(bodies[0]?.model, undefined, "the server runs the model it loaded");
+    assert.equal(bodies[0]?.max_tokens, 8192, "not the server's 512");
+
+    const second = await client.complete({
+      messages: [
+        { role: "system", content: "S" },
+        { role: "user", content: "hi" },
+        { role: "assistant", content: null, thinking: "Hm.", tool_calls: first.message.tool_calls },
+        { role: "tool", tool_call_id: "c1", name: "add_fact", content: "added" },
+      ],
+      format: { type: "object" },
+    });
+    assert.equal(second.message.content, '{"ok": true}');
+    const sent = bodies[1]?.messages as { role: string; content: string; tool_call_id?: string; thinking?: string }[];
+    assert.match(sent[0]?.content ?? "", /^S\n\nReply with only JSON that matches this JSON Schema/);
+    assert.equal(sent[2]?.thinking, undefined);
+    assert.equal(sent[3]?.tool_call_id, "c1");
+  } finally {
+    server.close();
+  }
+});
+
 test("the lead posts a task; the research worker does it through five.llm.agent, keeps only the facts its source says, and its result is on the board", async () => {
   // The source the research agent reads.
   const http = await import("node:http");
