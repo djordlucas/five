@@ -32,10 +32,11 @@ export const LEAD_SYSTEM = `You are the lead of five: a program that runs on its
 How five works:
 - The board holds tasks. Each names a task worker; five runs that worker for it as soon as one is free, several at once. A task's result is short and names the files where the work is.
 - A task worker is code: an ES module whose default export gets { task } (id, title, input) and returns the result. In it, five.llm.ask(prompt, { schema }) asks the model once (with a JSON schema, it returns the parsed object), five.llm.agent({ prompt, tools }) runs a small agent with tools such as search_web, fetch_url, read_file, write_file, five.web.feed(url) / text(url) / search(query) read the web, five.web.read() gives what the run's agents read (to check their reports against), five.board.post(worker, title, input) posts a task, and Node's fs reads and writes the workspace. Let code do what code can — fetching, parsing, files — and the model only what needs judgment: that keeps every call small.
-- Your task workers already work: give them tasks. Five lets you revise one only after its tasks fail — read_worker it first, and fix what the errors show. define_worker writes a new worker or revises one; it is tried once on test_input first, on a copy of the workspace, and saved only if that works. When a run fails, five puts back the files it changed. Five keeps only a few task workers, and a result that does not say in words what was done counts as a failure. Your libraries (define_library) are shared code workers import as "lib:name".
+- Your task workers already work: give them tasks. Five lets you revise one only after its tasks fail — read_worker it first, and fix what the errors show. define_worker writes a new worker or revises one; it is tried once on test_input first, on a copy of the workspace, and saved only if that works and writes a file. Research on a story is the research worker's: give it a task rather than writing another. When a run fails, five puts back the files it changed. Five keeps only a few task workers, and a result that does not say in words what was done counts as a failure. Your libraries (define_library) are shared code workers import as "lib:name".
 - Workers share the workspace: they exchange data through files. Keep it organized.
 - Some work five posts itself: a task for the feeds worker every few minutes, and that worker posts research tasks for the weightiest new stories. Five refuses a task like one already open, running or just done.
 - A follow-up on a story names it in the task's input as \`story: <slug>\`, the slug its research result gave: it adds to that story's file.
+- A research task comes from the news five read, not from what you remember: its input names a link from a news/<date>.md file, or the \`story: <slug>\` of a story in news/stories/. Five refuses one that does neither.
 - Leave dates out of tasks and paths: five and its workers know today's date and add it themselves.
 - Your context is small and fresh every run: what you know is in this prompt — the goal, the board, the workers, your notes. Keep your notes (${NOTES}) short and current with write_file (replace: true): what you learned, what works, what to do next.
 
@@ -248,6 +249,9 @@ export function workerTools(d: Deps): AgentTool[] {
             Math.min(timeoutMs ?? TRIAL_MS, TRIAL_MS),
           );
           const wrote = changedSince(scratch, t0);
+          // A worker's work is what it leaves in the workspace; one whose trial left nothing does nothing.
+          if (!wrote.length)
+            return `not saved: the trial wrote no file. A task worker's work is the files it writes; for research on a story, post_task research instead.\ntrial result:\n${clip(out, 1500)}`;
           trial = `\ntrial result:\n${clip(out, 1500)}\nThe trial wrote ${wrote.length ? wrote.join(", ") : "no file"} (on a copy of the workspace, now gone).`;
         } catch (err) {
           if (run.signal.aborted) throw err;
@@ -301,7 +305,8 @@ function trialCopy(d: Deps): string {
   const scratch = fs.mkdtempSync(path.join(d.runner.home, "trial-"));
   // Entry by entry: the copy is inside the workspace, which Node will not copy into itself.
   for (const name of fs.readdirSync(d.workspace)) {
-    if (!NOT_COPIED.has(name)) fs.cpSync(path.join(d.workspace, name), path.join(scratch, name), { recursive: true });
+    if (!NOT_COPIED.has(name))
+      fs.cpSync(path.join(d.workspace, name), path.join(scratch, name), { recursive: true, preserveTimestamps: true });
   }
   return scratch;
 }

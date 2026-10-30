@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <title>five</title>
+  <rect width="128" height="128" rx="28" fill="#0b0b0b"/>
+  <!-- A 5 drawn as one stroke, and five dots: the team. -->
+  <path d="M80 30 H50 L47 60 C55 55 63 54 70 56 C83 59 89 70 87 82 C85 95 74 101 62 101 C53 101 46 97 42 91"
+        fill="none" stroke="#ffffff" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
+  <g fill="#ffffff">
+    <circle cx="100" cy="30" r="5"/>
+    <circle cx="100" cy="46" r="3.5" opacity="0.8"/>
+    <circle cx="100" cy="59" r="3.5" opacity="0.8"/>
+    <circle cx="100" cy="72" r="3.5" opacity="0.8"/>
+    <circle cx="100" cy="85" r="3.5" opacity="0.8"/>
+  </g>
+</svg>

@@ -8,7 +8,8 @@ const DEFAULT_FEEDS = [
   "https://www.aljazeera.com/xml/rss/all.xml",
   "https://feeds.npr.org/1004/rss.xml",
 ];
-const SEEN = "news/seen.json";
+// A dot file: its own state, which agents' file tools leave alone.
+const SEEN = "news/.seen.json";
 const LOCK = "news/.feeds.lock";
 const BATCH = 15;
 /** Research tasks one run posts at most, for its weightiest new items. */

@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="470" viewBox="0 0 1200 470">
+<style>text{font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;fill:#0b0b0b}.t{font-size:28px;font-weight:700}.s{font-size:18px;fill:#52514e}.g{font-size:20px;font-weight:600}.v{font-size:18px;font-weight:600}.ax{font-size:15px;fill:#52514e}.lg{font-size:17px;fill:#52514e}</style>
+<rect width="1200" height="470" fill="#fcfcfb"/>
+<text x="40" y="56" class="t">Four research calls at once: 66 s on Ollama, 22 s on MLX</text>
+<text x="40" y="88" class="s">Seconds until the last reply, lower is better. qwen3.5 4B, 4-bit, thinking off; 16 GB Apple M4; real news pages, 4 tool calls each.</text>
+<rect x="40" y="112" width="16" height="16" rx="3" fill="#2a78d6"/><text x="64" y="126" class="lg">Ollama</text>
+<rect x="160" y="112" width="16" height="16" rx="3" fill="#eb6834"/><text x="184" y="126" class="lg">MLX</text>
+<line x1="330.0" y1="150" x2="330.0" y2="410" stroke="#e7e6e2" stroke-width="1"/>
+<text x="330.0" y="434" class="ax" text-anchor="middle">0 s</text>
+<line x1="442.8571428571429" y1="150" x2="442.8571428571429" y2="410" stroke="#e7e6e2" stroke-width="1"/>
+<text x="442.8571428571429" y="434" class="ax" text-anchor="middle">10 s</text>
+<line x1="555.7142857142858" y1="150" x2="555.7142857142858" y2="410" stroke="#e7e6e2" stroke-width="1"/>
+<text x="555.7142857142858" y="434" class="ax" text-anchor="middle">20 s</text>
+<line x1="668.5714285714286" y1="150" x2="668.5714285714286" y2="410" stroke="#e7e6e2" stroke-width="1"/>
+<text x="668.5714285714286" y="434" class="ax" text-anchor="middle">30 s</text>
+<line x1="781.4285714285714" y1="150" x2="781.4285714285714" y2="410" stroke="#e7e6e2" stroke-width="1"/>
+<text x="781.4285714285714" y="434" class="ax" text-anchor="middle">40 s</text>
+<line x1="894.2857142857143" y1="150" x2="894.2857142857143" y2="410" stroke="#e7e6e2" stroke-width="1"/>
+<text x="894.2857142857143" y="434" class="ax" text-anchor="middle">50 s</text>
+<line x1="1007.1428571428571" y1="150" x2="1007.1428571428571" y2="410" stroke="#e7e6e2" stroke-width="1"/>
+<text x="1007.1428571428571" y="434" class="ax" text-anchor="middle">60 s</text>
+<line x1="1120.0" y1="150" x2="1120.0" y2="410" stroke="#e7e6e2" stroke-width="1"/>
+<text x="1120.0" y="434" class="ax" text-anchor="middle">70 s</text>
+<text x="310" y="215" class="g" text-anchor="end">One call alone</text>
+<path d="M330 165 H557.3571428571429 Q561.3571428571429 165 561.3571428571429 169 V205 Q561.3571428571429 209 557.3571428571429 209 H330 Z" fill="#2a78d6"/>
+<text x="571.3571428571429" y="193.0" class="v">20 s</text><text x="623.3571428571429" y="193.0" class="ax">Ollama</text>
+<path d="M330 211 H524.6285714285715 Q528.6285714285715 211 528.6285714285715 215 V251 Q528.6285714285715 255 524.6285714285715 255 H330 Z" fill="#eb6834"/>
+<text x="538.6285714285715" y="239.0" class="v">18 s</text><text x="590.6285714285715" y="239.0" class="ax">MLX</text>
+<text x="310" y="333" class="g" text-anchor="end">Four calls at once</text>
+<path d="M330 283 H1068.6 Q1072.6 283 1072.6 287 V323 Q1072.6 327 1068.6 327 H330 Z" fill="#2a78d6"/>
+<text x="1082.6" y="311.0" class="v">66 s</text><text x="1134.6" y="311.0" class="ax">Ollama</text>
+<path d="M330 329 H575.4142857142857 Q579.4142857142857 329 579.4142857142857 333 V369 Q579.4142857142857 373 575.4142857142857 373 H330 Z" fill="#eb6834"/>
+<text x="589.4142857142857" y="357.0" class="v">22 s</text><text x="641.4142857142857" y="357.0" class="ax">MLX</text>
+<line x1="330" y1="150" x2="330" y2="410" stroke="#52514e" stroke-width="1.5"/>
+</svg>

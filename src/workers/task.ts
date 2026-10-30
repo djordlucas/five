@@ -75,7 +75,12 @@ export async function runWorker(
   // A worker that caught its own error and returned it has failed all the same.
   if (typeof v === "object" && "error" in v && v.error)
     throw new Error(`the worker returned an error: ${clip(String(v.error), 500)}`);
-  const text = typeof v === "string" ? v : JSON.stringify(v, null, 2);
+  // An object — {"status": "ok", "factsFound": 0} — reads as a result to a small model but says nothing.
+  if (typeof v !== "string")
+    throw new Error(
+      `the worker returned ${Array.isArray(v) ? "an array" : typeof v === "object" ? "an object" : `a ${typeof v}`}: its result must be text that says, in words, what it found or did and the files it wrote`,
+    );
+  const text = v;
   // A placeholder — {"done": true}, "ok" — is no result: say what was done, and where.
   if ((text.match(/[A-Za-z]{2,}/g) ?? []).length < MIN_RESULT_WORDS)
     throw new Error(

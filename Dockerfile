@@ -56,10 +56,12 @@ COPY src src
 COPY --from=web /app/web/dist web/dist
 RUN mkdir -p /workspace && chown node:node /workspace
 # five listens on every interface inside the container; compose publishes the
-# port on the host's loopback only. Ollama runs on the host.
+# port on the host's loopback only. Ollama, or MLX's servers, run on the host.
 ENV FIVE_WORKSPACE=/workspace \
     FIVE_API_ADDR=0.0.0.0:5555 \
     FIVE_OLLAMA_ENDPOINT=http://host.docker.internal:11434 \
+    FIVE_MLX_ENDPOINT=http://host.docker.internal:8080 \
+    FIVE_MLX_LEAD_ENDPOINT=http://host.docker.internal:8081 \
     NODE_ENV=production
 EXPOSE 5555
 USER node

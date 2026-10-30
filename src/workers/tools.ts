@@ -5,6 +5,8 @@
 // define_tool, sql, …), the media tools and the tools the agent built are
 // wrapped here so any agent can be given them by name.
 
+import * as fs from "node:fs";
+import * as path from "node:path";
 import {
   awaitRun,
   type BuiltinContext,
@@ -17,7 +19,7 @@ import { mediaToolsByName } from "../agent/media.ts";
 import type { Task } from "../api/types.ts";
 import { Workspace, WorkspaceError } from "../api/workspace.ts";
 import { type AgentTool, futureDate } from "./agent.ts";
-import { MAX_INPUT, MAX_TITLE } from "./board.ts";
+import { MAX_INPUT, MAX_TITLE, storyOf } from "./board.ts";
 import type { Deps, Run } from "./run.ts";
 import { FIXED } from "./store.ts";
 import { fetchText, formatResults, pageKey, searchWeb } from "./web.ts";
@@ -27,6 +29,13 @@ export const AGENT_ID = "five";
 
 /** Lines read_file gives at once by default. */
 const READ_LINES = 200;
+/** The latest news files (news/<date>.md) whose links a research task the lead posts may name. */
+const NEWS_DAYS = 3;
+
+/** A dot file, or one in a dot directory: a task worker's own state, such as feeds' news/.seen.json. */
+const isPrivate = (p: string) => p.split(/[\\/]/).some((part) => part.startsWith(".") && part !== "." && part !== "..");
+const privateError = (p: string) =>
+  `error: ${p} is a task worker's own state (a dot file): agents leave it to the worker that keeps it.`;
 
 const str = (v: unknown) => (typeof v === "string" ? v : v === undefined || v === null ? "" : String(v));
 
@@ -55,6 +64,7 @@ export function workspaceTools(d: Deps): AgentTool[] {
       },
       run: (a) =>
         guard(() => {
+          if (isPrivate(str(a.path))) return privateError(str(a.path));
           const { entry, bytes } = ws().read(str(a.path));
           if (bytes.subarray(0, 8000).includes(0)) return `${entry.path} is a binary file (${entry.bytes} bytes).`;
           const all = bytes.toString("utf8").split("\n");
@@ -88,6 +98,7 @@ export function workspaceTools(d: Deps): AgentTool[] {
         guard(() => {
           const later = futureDate(str(a.path));
           if (later) return `error: ${later}`;
+          if (isPrivate(str(a.path))) return privateError(str(a.path));
           const w = ws();
           if (a.replace !== true) {
             try {
@@ -113,6 +124,7 @@ export function workspaceTools(d: Deps): AgentTool[] {
       },
       run: (a, run) =>
         guard(() => {
+          if (isPrivate(str(a.path))) return privateError(str(a.path));
           const w = ws();
           let before = "";
           try {
@@ -137,11 +149,13 @@ export function workspaceTools(d: Deps): AgentTool[] {
       run: (a) =>
         guard(() => {
           const p = str(a.path).replace(/^\.\/?$/, "");
+          if (isPrivate(p)) return privateError(p);
           const dir = ws().list(p);
-          if (!dir.entries.length) return `${dir.path || "the workspace"} is empty.`;
-          const shown = dir.entries.slice(0, 200);
+          const entries = dir.entries.filter((e) => !isPrivate(e.path));
+          if (!entries.length) return `${dir.path || "the workspace"} is empty.`;
+          const shown = entries.slice(0, 200);
           const lines = shown.map((e) => (e.dir ? `${e.path}/` : `${e.path} (${e.bytes} bytes)`));
-          if (dir.entries.length > shown.length) lines.push(`… and ${dir.entries.length - shown.length} more`);
+          if (entries.length > shown.length) lines.push(`… and ${entries.length - shown.length} more`);
           return lines.join("\n");
         }),
     },
@@ -182,6 +196,39 @@ function remember(run: Run, url: string, text: string): void {
 }
 
 /** Post, read and cancel tasks; `by` is who posts. */
+/**
+ * Why a research task the lead posts is not grounded in the news five read,
+ * or undefined when it is: it names a link from a recent news/<date>.md, or
+ * follows a story five keeps (`story: <slug>`, news/stories/<slug>.md). A
+ * small model otherwise posts what it remembers, years old.
+ */
+function ungrounded(workspace: string, text: string): string | undefined {
+  const story = storyOf(text);
+  if (story && fs.existsSync(path.join(workspace, "news", "stories", `${story}.md`))) return undefined;
+  const key = (url: string) => pageKey(url.replace(/[?#].*$/, ""));
+  const links = (text.match(LINK) ?? []).map(key);
+  if (links.length) {
+    const dir = path.join(workspace, "news");
+    const files = fs.existsSync(dir)
+      ? fs
+          .readdirSync(dir)
+          .filter((f) => /^\d{4}-\d{2}-\d{2}\.md$/.test(f))
+          .sort()
+          .slice(-NEWS_DAYS)
+      : [];
+    const known = new Set(
+      files.flatMap((f) => (fs.readFileSync(path.join(dir, f), "utf8").match(LINK) ?? []).map(key)),
+    );
+    if (links.some((l) => known.has(l))) return undefined;
+  }
+  return (
+    "a research task comes from the news five read. Put in its input a link from a news/<date>.md file " +
+    "(First reported: <link>), or `story: <slug>` of a story in news/stories/ to follow it up."
+  );
+}
+
+const LINK = /https?:\/\/[^\s)>\]"'`]+/g;
+
 export function boardTools(d: Deps, by: string): AgentTool[] {
   return [
     {
@@ -212,6 +259,10 @@ export function boardTools(d: Deps, by: string): AgentTool[] {
         if (later) return `error: ${later}`;
         if (input.length > MAX_INPUT)
           return `error: an input is at most ${MAX_INPUT} characters; put long data in a file and name it`;
+        if (by === "lead" && worker === "research") {
+          const why = ungrounded(d.workspace, `${title}\n${input}`);
+          if (why) return `not posted: ${why}`;
+        }
         const same = d.board.alike({ worker, title, input });
         if (same) return `not posted: ${sameTask(same)}`;
         const task = d.board.post({ worker, title, input, by });

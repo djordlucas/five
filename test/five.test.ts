@@ -632,6 +632,74 @@ test("the Ollama client reads a streamed reply as it arrives", async () => {
   }
 });
 
+test("the MLX client: streamed tool calls in pieces, the tool's reply by call id, and JSON cut out of a reply", async () => {
+  const http = await import("node:http");
+  const bodies: Record<string, unknown>[] = [];
+  const replies = [
+    [
+      { choices: [{ delta: { reasoning: "Hm." } }] },
+      {
+        choices: [
+          { delta: { tool_calls: [{ index: 0, id: "c1", function: { name: "add_fact", arguments: '{"fa' } }] } },
+        ],
+      },
+      { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: 'ct":"x"}' } }] } }] },
+      { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
+      { choices: [], usage: { prompt_tokens: 9, completion_tokens: 4 } },
+    ],
+    [{ choices: [{ delta: { content: 'Sure:\n```json\n{"ok": true}\n```' }, finish_reason: "stop" }] }],
+    [],
+  ];
+  const server = http.createServer(async (req, res) => {
+    let text = "";
+    for await (const piece of req) text += piece;
+    bodies.push(JSON.parse(text));
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    for (const c of replies[bodies.length - 1] ?? []) {
+      res.write(`data: ${JSON.stringify(c)}\n\n`);
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    res.end("data: [DONE]\n\n");
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  try {
+    const { Mlx } = await import("../src/llm/mlx.ts");
+    const port = (server.address() as { port: number }).port;
+    const client = new Mlx({ model: "m", endpoint: `http://127.0.0.1:${port}` });
+    const tools = [{ name: "add_fact", description: "d", parameters: { type: "object" } }];
+    const first = await client.complete({ messages: [{ role: "user", content: "hi" }], tools });
+    assert.deepEqual(first.message.tool_calls, [
+      { id: "c1", type: "function", function: { name: "add_fact", arguments: '{"fact":"x"}' } },
+    ]);
+    assert.equal(first.message.thinking, "Hm.");
+    assert.equal(first.usage?.prompt_tokens, 9);
+    assert.equal(first.finishReason, "tool_calls");
+    assert.equal(bodies[0]?.model, undefined, "the server runs the model it loaded");
+    assert.equal(bodies[0]?.max_tokens, 8192, "not the server's 512");
+    assert.equal(bodies[0]?.presence_penalty, 1.5, "sampled as Ollama samples, not greedily");
+
+    const second = await client.complete({
+      messages: [
+        { role: "system", content: "S" },
+        { role: "user", content: "hi" },
+        { role: "assistant", content: null, thinking: "Hm.", tool_calls: first.message.tool_calls },
+        { role: "tool", tool_call_id: "c1", name: "add_fact", content: "added" },
+      ],
+      format: { type: "object" },
+    });
+    assert.equal(second.message.content, '{"ok": true}');
+    const sent = bodies[1]?.messages as { role: string; content: string; tool_call_id?: string; thinking?: string }[];
+    assert.match(sent[0]?.content ?? "", /^S\n\nReply with only JSON that matches this JSON Schema/);
+    assert.deepEqual([bodies[1]?.temperature, bodies[1]?.presence_penalty], [0, undefined], "JSON is sampled greedily");
+    assert.equal(sent[2]?.thinking, undefined);
+    assert.equal(sent[3]?.tool_call_id, "c1");
+
+    await assert.rejects(client.complete({ messages: [{ role: "user", content: "hi" }] }), /ended before it began/);
+  } finally {
+    server.close();
+  }
+});
+
 test("the lead posts a task; the research worker does it through five.llm.agent, keeps only the facts its source says, and its result is on the board", async () => {
   // The source the research agent reads.
   const http = await import("node:http");
@@ -649,7 +717,15 @@ test("the lead posts a task; the research worker does it through five.llm.agent,
     const steps = req.messages.filter((m) => m.role === "assistant").length;
     if (sys.startsWith("You are the lead")) {
       return steps === 0
-        ? { calls: [["post_task", { worker: "research", title: "Find what X is", input: "story: letter-x" }]] }
+        ? {
+            calls: [
+              ["post_task", { worker: "research", title: "India strikes down farm laws", input: "story: farm-laws" }],
+              [
+                "post_task",
+                { worker: "research", title: "Find what X is", input: `story: letter-x\nFirst reported: ${url}` },
+              ],
+            ],
+          }
         : { content: "Posted one research task." };
     }
     if (sys.startsWith("You are a research worker")) {
@@ -691,6 +767,13 @@ test("the lead posts a task; the research worker does it through five.llm.agent,
     }
     return { content: "?" };
   });
+  // The news five read, which a research task the lead posts must come from.
+  const day = new Date().toISOString().slice(0, 10);
+  fs.mkdirSync(path.join(cfg.workspace, "news"), { recursive: true });
+  fs.writeFileSync(
+    path.join(cfg.workspace, `news/${day}.md`),
+    `# News, ${day}\n\n- X is a letter. — [x](${url}?at=rss)\n`,
+  );
   try {
     five.five.settings.update({ minOpenTasks: 0 });
     five.five.start();
@@ -705,7 +788,6 @@ test("the lead posts a task; the research worker does it through five.llm.agent,
     task.result ?? "",
     /^3 checked facts added to news\/stories\/letter-x\.md \(story: letter-x\)\. 3 dropped/,
   );
-  const day = new Date().toISOString().slice(0, 10);
   const story = fs.readFileSync(path.join(cfg.workspace, "news/stories/letter-x.md"), "utf8");
   assert.equal(
     story,
@@ -716,15 +798,19 @@ test("the lead posts a task; the research worker does it through five.llm.agent,
     /- \[Find what X is\]\(stories\/letter-x\.md\), updated /,
   );
 
+  // A research task from what the lead remembers is refused.
+  const refused = model.requests[1]?.find((m) => m.role === "tool")?.content ?? "";
+  assert.match(refused, /^not posted: a research task comes from the news five read/);
+
   // The lead's prompt: the goal, the board, the task workers — built fresh.
   const lead = model.requests[0] ?? [];
   assert.match(
     String(lead[1]?.content),
-    /^## Goal\n\nFollow what is happening in the world[\s\S]*## Task workers\n\n- feeds \(r1[\s\S]*- research \(r1[\s\S]*## Files changed lately\n\nNone yet\./,
+    /^## Goal\n\nFollow what is happening in the world[\s\S]*## Task workers\n\n- feeds \(r1[\s\S]*- research \(r1[\s\S]*## Files changed lately\n\n- news\/\d{4}-\d\d-\d\d\.md/,
   );
   // The research agent's context: its own prompt, nothing of the lead's.
   const research = model.requests.find((r) => system({ messages: r }).startsWith("You are a research worker")) ?? [];
-  assert.match(String(research[1]?.content), /^Task #1: Find what X is\n\nstory: letter-x$/);
+  assert.match(String(research[1]?.content), /^Task #1: Find what X is\n\nstory: letter-x\nFirst reported: http/);
 
   const seen = events(five);
   const runs = seen
@@ -758,13 +844,45 @@ test("a date that has not come yet is refused in a task and a path", async () =>
   assert.equal(five.five.board.counts().open, 0);
 });
 
+test("a dot file is a task worker's own state: agents' file tools neither list, read nor write it", async () => {
+  const { five, cfg } = make([
+    {
+      calls: [
+        ["list_files", { path: "news" }],
+        ["read_file", { path: "news/.seen.json" }],
+        ["write_file", { path: "news/.seen.json", content: "[]", replace: true }],
+        ["append_file", { path: "news/.seen.json", content: "x" }],
+      ],
+    },
+    { content: "ok" },
+  ]);
+  fs.mkdirSync(path.join(cfg.workspace, "news"), { recursive: true });
+  fs.writeFileSync(path.join(cfg.workspace, "news/.seen.json"), '["a"]');
+  fs.writeFileSync(path.join(cfg.workspace, "news/today.md"), "x");
+  const d = five.five.d;
+  const run = new Run({ n: d.state.nextRun(), worker: "lead", kind: "lead", log: noopLogger, emit: d.emit });
+  await runScope.run(run, () =>
+    runAgent(d, run, {
+      system: "You are a test.",
+      messages: [{ role: "user", content: "go" }],
+      tools: workspaceTools(d),
+    }),
+  );
+  const [listed, ...refused] = events(five).flatMap((e) => (e.type === "tool" ? [e.result] : []));
+  assert.equal(listed, "news/today.md (1 bytes)");
+  assert.equal(refused.length, 3);
+  for (const r of refused) assert.match(r, /^error: news\/\.seen\.json is a task worker's own state/);
+  assert.equal(fs.readFileSync(path.join(cfg.workspace, "news/.seen.json"), "utf8"), '["a"]');
+});
+
 test("define_worker: tried on a trial task first, refused for five's own workers and for a worker that works; then it does a task", async () => {
   const code = `export default async ({ task }) => {
   const out = await five.llm.ask("Count the words: " + task.input, { schema: { type: "object", properties: { n: { type: "integer" } }, required: ["n"] } });
   fs.writeFileSync("count.txt", String(out.n));
   return "counted " + out.n + " words, in count.txt";
 };`;
-  const said = 'export default async () => "did nothing, and said so in words";';
+  const said =
+    'export default async () => { fs.writeFileSync("said.txt", "x"); return "wrote said.txt, and said so in words"; };';
   const { five, model, cfg } = make((req) => {
     const sys = system(req);
     const steps = req.messages.filter((m) => m.role === "assistant").length;
@@ -805,6 +923,15 @@ test("define_worker: tried on a trial task first, refused for five's own workers
                 test_input: "x",
               },
             ],
+            [
+              "define_worker",
+              {
+                name: "quiet",
+                description: "Talks.",
+                code: 'export default async () => "did nothing, and said so in words";',
+                test_input: "x",
+              },
+            ],
             ["define_worker", { name: "fifth", description: "Talks.", code: said, test_input: "x" }],
             ["define_worker", { name: "sixth", description: "Talks.", code: said, test_input: "x" }],
           ],
@@ -833,10 +960,15 @@ test("define_worker: tried on a trial task first, refused for five's own workers
   // A worker that works is not rewritten; one that returns nothing fails its trial.
   assert.match(results[4] ?? "", /^not saved: count works — 0 tasks done, none of its latest failed/);
   assert.match(results[5] ?? "", /^not saved: the trial failed\nthe worker returned nothing/);
-  assert.match(results[6] ?? "", /^not saved: the trial failed\nthe worker's result says nothing \(\{/);
+  assert.match(
+    results[6] ?? "",
+    /^not saved: the trial failed\nthe worker returned an object: its result must be text/,
+  );
   assert.match(results[7] ?? "", /^not saved: the trial failed\nthe worker returned an error: ENOENT/);
-  assert.match(results[8] ?? "", /^saved worker fifth/);
-  assert.match(results[9] ?? "", /^not saved: five keeps at most 4 task workers — count \(1 done/);
+  // A worker whose trial leaves no file does nothing.
+  assert.match(results[8] ?? "", /^not saved: the trial wrote no file/);
+  assert.match(results[9] ?? "", /^saved worker fifth/);
+  assert.match(results[10] ?? "", /^not saved: five keeps at most 4 task workers — count \(1 done/);
   assert.equal((five.five.board.list()[0] as Task).result, "counted 2 words, in count.txt");
   assert.equal(fs.readFileSync(path.join(cfg.workspace, "count.txt"), "utf8"), "2");
   const asked = events(five).find((e) => e.type === "model" && e.prompt);
