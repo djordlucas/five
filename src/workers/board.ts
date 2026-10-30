@@ -206,7 +206,7 @@ function toTask(x: Row): Task {
 }
 
 /** The story a task names in its input, `story: <slug>`. */
-function storyOf(input: string): string | undefined {
+export function storyOf(input: string): string | undefined {
   return /\bstory:\s*([\w-]+)/i.exec(input)?.[1]?.toLowerCase();
 }
 

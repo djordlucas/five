@@ -715,7 +715,15 @@ test("the lead posts a task; the research worker does it through five.llm.agent,
     const steps = req.messages.filter((m) => m.role === "assistant").length;
     if (sys.startsWith("You are the lead")) {
       return steps === 0
-        ? { calls: [["post_task", { worker: "research", title: "Find what X is", input: "story: letter-x" }]] }
+        ? {
+            calls: [
+              ["post_task", { worker: "research", title: "India strikes down farm laws", input: "story: farm-laws" }],
+              [
+                "post_task",
+                { worker: "research", title: "Find what X is", input: `story: letter-x\nFirst reported: ${url}` },
+              ],
+            ],
+          }
         : { content: "Posted one research task." };
     }
     if (sys.startsWith("You are a research worker")) {
@@ -757,6 +765,13 @@ test("the lead posts a task; the research worker does it through five.llm.agent,
     }
     return { content: "?" };
   });
+  // The news five read, which a research task the lead posts must come from.
+  const day = new Date().toISOString().slice(0, 10);
+  fs.mkdirSync(path.join(cfg.workspace, "news"), { recursive: true });
+  fs.writeFileSync(
+    path.join(cfg.workspace, `news/${day}.md`),
+    `# News, ${day}\n\n- X is a letter. — [x](${url}?at=rss)\n`,
+  );
   try {
     five.five.settings.update({ minOpenTasks: 0 });
     five.five.start();
@@ -771,7 +786,6 @@ test("the lead posts a task; the research worker does it through five.llm.agent,
     task.result ?? "",
     /^3 checked facts added to news\/stories\/letter-x\.md \(story: letter-x\)\. 3 dropped/,
   );
-  const day = new Date().toISOString().slice(0, 10);
   const story = fs.readFileSync(path.join(cfg.workspace, "news/stories/letter-x.md"), "utf8");
   assert.equal(
     story,
@@ -782,15 +796,19 @@ test("the lead posts a task; the research worker does it through five.llm.agent,
     /- \[Find what X is\]\(stories\/letter-x\.md\), updated /,
   );
 
+  // A research task from what the lead remembers is refused.
+  const refused = model.requests[1]?.find((m) => m.role === "tool")?.content ?? "";
+  assert.match(refused, /^not posted: a research task comes from the news five read/);
+
   // The lead's prompt: the goal, the board, the task workers — built fresh.
   const lead = model.requests[0] ?? [];
   assert.match(
     String(lead[1]?.content),
-    /^## Goal\n\nFollow what is happening in the world[\s\S]*## Task workers\n\n- feeds \(r1[\s\S]*- research \(r1[\s\S]*## Files changed lately\n\nNone yet\./,
+    /^## Goal\n\nFollow what is happening in the world[\s\S]*## Task workers\n\n- feeds \(r1[\s\S]*- research \(r1[\s\S]*## Files changed lately\n\n- news\/\d{4}-\d\d-\d\d\.md/,
   );
   // The research agent's context: its own prompt, nothing of the lead's.
   const research = model.requests.find((r) => system({ messages: r }).startsWith("You are a research worker")) ?? [];
-  assert.match(String(research[1]?.content), /^Task #1: Find what X is\n\nstory: letter-x$/);
+  assert.match(String(research[1]?.content), /^Task #1: Find what X is\n\nstory: letter-x\nFirst reported: http/);
 
   const seen = events(five);
   const runs = seen
@@ -830,7 +848,8 @@ test("define_worker: tried on a trial task first, refused for five's own workers
   fs.writeFileSync("count.txt", String(out.n));
   return "counted " + out.n + " words, in count.txt";
 };`;
-  const said = 'export default async () => "did nothing, and said so in words";';
+  const said =
+    'export default async () => { fs.writeFileSync("said.txt", "x"); return "wrote said.txt, and said so in words"; };';
   const { five, model, cfg } = make((req) => {
     const sys = system(req);
     const steps = req.messages.filter((m) => m.role === "assistant").length;
@@ -871,6 +890,15 @@ test("define_worker: tried on a trial task first, refused for five's own workers
                 test_input: "x",
               },
             ],
+            [
+              "define_worker",
+              {
+                name: "quiet",
+                description: "Talks.",
+                code: 'export default async () => "did nothing, and said so in words";',
+                test_input: "x",
+              },
+            ],
             ["define_worker", { name: "fifth", description: "Talks.", code: said, test_input: "x" }],
             ["define_worker", { name: "sixth", description: "Talks.", code: said, test_input: "x" }],
           ],
@@ -899,10 +927,15 @@ test("define_worker: tried on a trial task first, refused for five's own workers
   // A worker that works is not rewritten; one that returns nothing fails its trial.
   assert.match(results[4] ?? "", /^not saved: count works — 0 tasks done, none of its latest failed/);
   assert.match(results[5] ?? "", /^not saved: the trial failed\nthe worker returned nothing/);
-  assert.match(results[6] ?? "", /^not saved: the trial failed\nthe worker's result says nothing \(\{/);
+  assert.match(
+    results[6] ?? "",
+    /^not saved: the trial failed\nthe worker returned an object: its result must be text/,
+  );
   assert.match(results[7] ?? "", /^not saved: the trial failed\nthe worker returned an error: ENOENT/);
-  assert.match(results[8] ?? "", /^saved worker fifth/);
-  assert.match(results[9] ?? "", /^not saved: five keeps at most 4 task workers — count \(1 done/);
+  // A worker whose trial leaves no file does nothing.
+  assert.match(results[8] ?? "", /^not saved: the trial wrote no file/);
+  assert.match(results[9] ?? "", /^saved worker fifth/);
+  assert.match(results[10] ?? "", /^not saved: five keeps at most 4 task workers — count \(1 done/);
   assert.equal((five.five.board.list()[0] as Task).result, "counted 2 words, in count.txt");
   assert.equal(fs.readFileSync(path.join(cfg.workspace, "count.txt"), "utf8"), "2");
   const asked = events(five).find((e) => e.type === "model" && e.prompt);
