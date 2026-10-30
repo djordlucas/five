@@ -5,7 +5,8 @@
 #   docker compose run --rm dev        shell in the toolchain, repo at /app
 #
 # All of five's data lives in ./workspace, mounted at /workspace. Ollama runs on
-# the host, at http://host.docker.internal:11434. Both read .env when it exists.
+# the host, at http://host.docker.internal:11434 — or, with FIVE_LLM=mlx, MLX's
+# servers at :8080 (and :8081, the lead's). Both read .env when it exists.
 
 services:
   five:
@@ -45,6 +46,8 @@ services:
         required: false
     environment:
       FIVE_OLLAMA_ENDPOINT: http://host.docker.internal:11434
+      FIVE_MLX_ENDPOINT: http://host.docker.internal:8080
+      FIVE_MLX_LEAD_ENDPOINT: http://host.docker.internal:8081
     extra_hosts:
       - "host.docker.internal:host-gateway"
     stdin_open: true

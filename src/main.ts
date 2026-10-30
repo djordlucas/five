@@ -8,6 +8,8 @@ import { fileURLToPath } from "node:url";
 import { createApi } from "./api/server.ts";
 import { createFive } from "./app.ts";
 import { loadConfig } from "./config.ts";
+import { Mlx } from "./llm/mlx.ts";
+import type { ChatModel } from "./llm/model.ts";
 import { Ollama } from "./llm/ollama.ts";
 import { createLogger, fileSink, type Sink, stderrSink } from "./log.ts";
 
@@ -24,18 +26,27 @@ const sinks: Sink[] = [stderrSink()];
 if (cfg.logFile) sinks.push(fileSink(cfg.logFile));
 const log = createLogger({ level: cfg.logLevel, sinks });
 
-const ollama = (model: string) =>
-  new Ollama({
-    model,
-    endpoint: cfg.endpoint,
-    contextTokens: cfg.contextTokens,
-    think: cfg.think,
-    ...(cfg.keepAlive && { keepAlive: cfg.keepAlive }),
-  });
-const five = createFive(cfg, ollama(cfg.model), log, cfg.leadModel ? ollama(cfg.leadModel) : undefined);
+const model = (name: string, endpoint: string): ChatModel =>
+  cfg.llm === "mlx"
+    ? new Mlx({ model: name, endpoint, think: cfg.think })
+    : new Ollama({
+        model: name,
+        endpoint: cfg.endpoint,
+        contextTokens: cfg.contextTokens,
+        think: cfg.think,
+        ...(cfg.keepAlive && { keepAlive: cfg.keepAlive }),
+      });
+const five = createFive(
+  cfg,
+  model(cfg.model, cfg.endpoint),
+  log,
+  cfg.leadModel ? model(cfg.leadModel, cfg.leadEndpoint) : undefined,
+);
 log.info("five started", {
+  llm: cfg.llm,
   model: cfg.model,
   ...(cfg.leadModel && { lead_model: cfg.leadModel }),
+  ...(cfg.leadModel && cfg.llm === "mlx" && { lead_endpoint: cfg.leadEndpoint }),
   endpoint: cfg.endpoint,
   context_tokens: cfg.contextTokens,
   think: cfg.think,
