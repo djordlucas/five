@@ -83,6 +83,10 @@ const SYSTEM =
   "Only facts you read on a page you fetched in this task, never from memory: anything else is dropped. " +
   "If the pages do not answer, say so.";
 
+/** Pages, and characters of each, the facts are asked from when the agent left no notes. */
+const PAGES = 3;
+const PAGE_CHARS = 3000;
+
 export default async ({ task }) => {
   fs.mkdirSync(STORIES, { recursive: true });
   const stories = fs
@@ -135,26 +139,37 @@ export default async ({ task }) => {
     tools: ["search_web", "fetch_url"],
   });
 
-  const out = await five.llm.ask(
-    `Research notes:\n${report}\n\nList the facts in these notes that come with a source URL and a sentence from that source, as they are written there. Then, in one line, what to watch next in this story.`,
-    {
-      schema: {
-        type: "object",
-        properties: {
-          facts: {
-            type: "array",
-            items: {
-              type: "object",
-              properties: { fact: { type: "string" }, url: { type: "string" }, quote: { type: "string" } },
-              required: ["fact", "url", "quote"],
-            },
-          },
-          watch: { type: "string" },
+  const FACTS = {
+    type: "object",
+    properties: {
+      facts: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: { fact: { type: "string" }, url: { type: "string" }, quote: { type: "string" } },
+          required: ["fact", "url", "quote"],
         },
-        required: ["facts"],
       },
+      watch: { type: "string" },
     },
+    required: ["facts"],
+  };
+  let out = await five.llm.ask(
+    `Research notes:\n${report}\n\nList the facts in these notes that come with a source URL and a sentence from that source, as they are written there. Then, in one line, what to watch next in this story.`,
+    { schema: FACTS },
   );
+  // An agent that read the pages but never wrote its notes — out of steps, still fetching — leaves
+  // no facts: ask for them from the pages themselves, a few, each cut short.
+  if (!out.facts?.length) {
+    const pages = (await five.web.read())
+      .filter((r) => /^https?:\/\//.test(r.url) && r.text.length > 500)
+      .slice(0, PAGES);
+    if (pages.length)
+      out = await five.llm.ask(
+        `Task: ${task.title}\n\n${pages.map((r) => `Page: ${r.url}\n${r.text.slice(0, PAGE_CHARS)}`).join("\n\n")}\n\nList up to five facts these pages give about the task, each with its page's URL and a sentence copied exactly from that page. Then, in one line, what to watch next in this story.`,
+        { schema: FACTS },
+      );
+  }
 
   // What the agent read, the page each fact names first; the page fetched again when the agent read none of it.
   const read = (await five.web.read()).map((r) => ({

@@ -86,6 +86,13 @@ export async function runAgent(d: Deps, run: Run, o: AgentOptions): Promise<Agen
         content: `[five] Your context is nearly full (${used} of ${runTokens} tokens). Finish now: save what matters to files, then reply with your result, without a tool call.`,
       });
     }
+    // Small models keep fetching until their steps run out, with nothing written: two before, say so.
+    if (steps >= 4 && i === steps - 2) {
+      o.messages.push({
+        role: "user",
+        content: "[five] Two model calls left. Reply now with your result, from what you have, without a tool call.",
+      });
+    }
     run.step++;
     const step = run.step;
     const stepLog = run.log.child({ step });
