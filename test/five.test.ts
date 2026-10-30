@@ -676,6 +676,7 @@ test("the MLX client: streamed tool calls in pieces, the tool's reply by call id
     assert.equal(first.finishReason, "tool_calls");
     assert.equal(bodies[0]?.model, undefined, "the server runs the model it loaded");
     assert.equal(bodies[0]?.max_tokens, 8192, "not the server's 512");
+    assert.equal(bodies[0]?.presence_penalty, 1.5, "sampled as Ollama samples, not greedily");
 
     const second = await client.complete({
       messages: [

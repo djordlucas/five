@@ -1,16 +1,52 @@
-# five
+<p align="center">
+  <img src="docs/logo.svg" width="96" height="96" alt="five">
+</p>
 
-An experimental self-modifying agent that never stops — now as a team of small
-models rather than one bigger one. A main loop in code runs the workers: a
-**lead** that plans, a **chat** that talks with the person, and **task
-workers** — code the lead writes — that do one task each, several at once, on
-one small model served by Ollama. Line seven/nine's sibling, and the most
-minimal of them: one process, one SQLite file, Ollama.
+<h1 align="center">five</h1>
 
-![Architecture of five, as one agent: drawn before the workers, to be redrawn](docs/architecture.png)
+<p align="center">
+  <b>A team of small models that never stops.</b><br>
+  A lead plans, workers written as code do the work, and code checks every result.
+</p>
 
-`docs/architecture.svg` is the source; `docs/architecture.png` is it rendered at
-2×. It shows five before the workers: one agent and its context.
+<p align="center">
+  <img alt="Node 24" src="https://img.shields.io/badge/node-24-339933?logo=nodedotjs&logoColor=white">
+  <img alt="TypeScript, run directly" src="https://img.shields.io/badge/TypeScript-type%20stripping-3178c6?logo=typescript&logoColor=white">
+  <img alt="Preact and Vite" src="https://img.shields.io/badge/UI-Preact%20%2B%20Vite-673ab8?logo=preact&logoColor=white">
+  <img alt="node:sqlite" src="https://img.shields.io/badge/state-node%3Asqlite-003b57?logo=sqlite&logoColor=white">
+  <img alt="Ollama or MLX" src="https://img.shields.io/badge/models-Ollama%20%7C%20MLX-0b0b0b">
+  <img alt="qwen3.5 4B" src="https://img.shields.io/badge/model-qwen3.5%204B-615ced">
+  <img alt="GPL-3.0" src="https://img.shields.io/badge/license-GPL--3.0-blue">
+</p>
+
+five is an experiment in getting real, unattended work out of a 4B model on a
+laptop. One big agent with a long context drifts, repeats itself and forgets;
+five splits the work instead. Line seven/nine's sibling, and the most minimal
+of them: one process, one SQLite file, a local model server.
+
+## The team
+
+![The team: the main loop, the lead, the chat, the task workers, the board, the workspace and the model slots](docs/team.png)
+
+- **The main loop is code, not a model.** It decides when the lead plans and
+  which worker runs next, so nothing depends on a small model remembering to.
+- **The lead plans and writes workers.** Each run starts from a prompt built
+  fresh: the goal, the board, its notes, the inbox. It posts tasks, and when no
+  worker fits, it writes one: an ES module, tried on a copy of the workspace
+  before it is saved.
+- **Task workers are code that calls the model.** Code fetches, parses and
+  files; the model is asked only what needs judgment, in small calls. Several
+  run at once, each in its own process.
+- **Code checks what the models say.** A fact is kept only if its sentence is
+  on a page the agent read, with every number in it. A task like one already
+  on the board is refused. A research task the lead posts must come from the
+  news five read. A failed run's file changes are put back.
+- **The chat runs beside them.** Talk to five at any time; it answers from
+  the workspace and can change the goal, while the others keep working.
+- **Contexts stay small.** Every agent starts fresh, only appends, and is
+  dropped when done. What lasts is in the workspace and on the board.
+
+`docs/team.svg` is the source of the picture; `docs/team.png` is it rendered at 2×.
 
 ## How it works
 
@@ -29,7 +65,7 @@ minimal of them: one process, one SQLite file, Ollama.
 | Inbox | The lead's messages to the person (`message_person`, with a subject, naming the workspace files it comes from), and the person's to five, which the lead reads at its next run — soon after. |
 | Settings | `src/workers/settings.ts`: slots, task runs, when the lead runs, steps and context budget of an agent, result size, image size, chat wait. Changed live on the Config page, kept in the state; the environment gives the defaults. |
 | seven's tools | `run_js`, `define_tool`, `start_tool` and the rest, and the tools the agents build, are there for any agent given them by name; `view_image` and `read_pdf` too. Five adds small tools of its own: `read_file`, `write_file`, `append_file`, `list_files`, `fetch_url` (a page as text, a feed as its items) and `search_web` (DuckDuckGo). |
-| The model | Ollama, `qwen3.5:4b` by default, 16k tokens a slot. Tool calls a small model writes as text are recovered. |
+| The model | Ollama, `qwen3.5:4b` by default, 16k tokens a slot; or MLX (`FIVE_LLM=mlx`). Tool calls a small model writes as text are recovered. |
 | State | `<workspace>/.five/five.db`: the event log, the board, the task workers, the goal, the settings, the inbox, tools, libraries, background runs, and whether five was running. |
 
 ## Ollama with several slots
@@ -50,7 +86,11 @@ With one slot five still works: the calls wait their turn in Ollama.
 program run with `uvx`) instead. It decodes concurrent calls together, where
 Ollama's slots mostly take turns: four research calls at once (qwen3.5 4B,
 4-bit, 16 GB M4) took 22 s with MLX against 66 s with Ollama, 69 against 26
-tokens/s. One server runs one model, so a lead with its own model gets its own:
+tokens/s.
+
+![Four research calls at once took 66 s on Ollama and 22 s on MLX; one call alone, 20 s and 18 s](docs/bench.png)
+
+One server runs one model, so a lead with its own model gets its own:
 
 ```sh
 make mlx          # the workers' model on :8080 (MLX_MODEL)
@@ -162,7 +202,7 @@ Workspace paths are relative to the workspace; `..`, a link out of it, and `.fiv
 | `src/api/` | the HTTP API, its shared types, and the workspace's files and databases (`workspace.ts`) |
 | `web/` | the web UI |
 | `test/` | `node:test` against a scripted model |
-| `docs/` | the architecture diagram |
+| `docs/` | the logo, the team diagram and the charts (SVG sources, PNGs rendered at 2×), and the screenshots |
 
 ## Development
 

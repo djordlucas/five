@@ -21,6 +21,12 @@ export interface MlxOptions {
 }
 
 export const MLX_ENDPOINT = "http://localhost:8080";
+/**
+ * Sampling as Ollama runs qwen3.5 (its Modelfile's parameters). MLX's server
+ * samples greedily unless told: at temperature 0 without a presence penalty, a
+ * small model fetches the same page twelve times over.
+ */
+export const SAMPLING = { temperature: 1, top_p: 0.95, top_k: 20, presence_penalty: 1.5 };
 /** Tries of a call whose connection fails. */
 const ATTEMPTS = 2;
 
@@ -77,6 +83,7 @@ export class Mlx implements ChatModel {
       stream: true,
       stream_options: { include_usage: true },
       max_tokens: maxTokens ?? this.opts.maxTokens,
+      ...SAMPLING,
       chat_template_kwargs: { enable_thinking: this.opts.think },
     });
 

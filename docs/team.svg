@@ -1,0 +1,130 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#57606a"/>
+    </marker>
+    <style>
+      text { font-family: "Helvetica Neue", Helvetica, Arial, sans-serif; fill: #1f2328; }
+      .h1 { font-size: 34px; font-weight: 700; }
+      .sub { font-size: 20px; fill: #57606a; }
+      .t { font-size: 24px; font-weight: 700; }
+      .tag { font-size: 15px; font-weight: 700; letter-spacing: 0.08em; fill: #57606a; }
+      .b { font-size: 17px; fill: #3d444d; }
+      .s { font-size: 15px; fill: #57606a; }
+      .mono { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 15px; fill: #3d444d; }
+      .lab { font-size: 15px; fill: #57606a; font-style: italic; }
+      .box { fill: #f6f8fa; stroke: #d0d7de; stroke-width: 2; }
+      .line { stroke: #8c959f; stroke-width: 2; fill: none; marker-end: url(#a); }
+      .dash { stroke: #8c959f; stroke-width: 2; fill: none; stroke-dasharray: 6 6; marker-end: url(#a); }
+    </style>
+  </defs>
+  <rect width="1600" height="1000" fill="#ffffff"/>
+
+  <text x="60" y="66" class="h1">five: a team of small models</text>
+  <text x="60" y="100" class="sub">Code runs the loop and checks the work; the models do only what needs judgment, each from a small, fresh context.</text>
+
+  <!-- The person -->
+  <rect x="60" y="150" width="400" height="150" rx="14" class="box"/>
+  <text x="84" y="186" class="tag">YOU</text>
+  <text x="84" y="220" class="t">The web UI</text>
+  <text x="84" y="252" class="b">Activity · Workspace · Inbox · Config · Monitor</text>
+  <text x="84" y="280" class="s">Follow every run live; talk to five at any time.</text>
+
+  <!-- The chat -->
+  <rect x="60" y="380" width="400" height="170" rx="14" fill="#fbefff" stroke="#8250df" stroke-width="2.5"/>
+  <text x="84" y="416" class="tag" style="fill:#8250df">FIXED · FIVE'S OWN</text>
+  <text x="84" y="450" class="t">The chat</text>
+  <text x="84" y="482" class="b">Answers from the files, the board, the web.</text>
+  <text x="84" y="508" class="b">Changes course: sets the goal, posts tasks.</text>
+  <text x="84" y="534" class="s">Runs while the others work, even paused.</text>
+
+  <!-- The main loop -->
+  <rect x="560" y="150" width="480" height="150" rx="14" fill="#0b0b0b"/>
+  <text x="584" y="186" class="tag" style="fill:#c3c2b7">CODE, NO MODEL</text>
+  <text x="584" y="220" class="t" style="fill:#ffffff">The main loop</text>
+  <text x="584" y="252" class="b" style="fill:#e6e6e6">Posts a feeds task every 15 min; runs the lead</text>
+  <text x="584" y="278" class="b" style="fill:#e6e6e6">when the board runs low; a worker per open task.</text>
+
+  <!-- The lead -->
+  <rect x="560" y="380" width="480" height="170" rx="14" fill="#ddf4ff" stroke="#0969da" stroke-width="2.5"/>
+  <text x="584" y="416" class="tag" style="fill:#0969da">FIXED · FIVE'S OWN</text>
+  <text x="584" y="450" class="t">The lead</text>
+  <text x="584" y="482" class="b">Plans from the goal, the board, its notes, the inbox.</text>
+  <text x="584" y="508" class="b">Posts tasks; writes task workers as code.</text>
+  <text x="584" y="534" class="s">A worker it writes is tried on a copy first.</text>
+
+  <!-- The board -->
+  <rect x="560" y="630" width="480" height="120" rx="14" class="box"/>
+  <text x="584" y="666" class="tag">THE BOARD</text>
+  <text x="584" y="698" class="mono">#12 research · "Dnipro attack" → 8 facts</text>
+  <text x="584" y="726" class="s">A task like one open, running or just done is refused.</text>
+
+  <!-- The task workers -->
+  <rect x="1140" y="150" width="400" height="600" rx="14" fill="#dafbe1" stroke="#1a7f37" stroke-width="2.5"/>
+  <text x="1164" y="186" class="tag" style="fill:#1a7f37">THE LEAD'S TO WRITE</text>
+  <text x="1164" y="220" class="t">Task workers</text>
+  <text x="1164" y="250" class="s">ES modules, one child process each, several at once.</text>
+
+  <rect x="1164" y="276" width="352" height="112" rx="10" fill="#ffffff" stroke="#1a7f37" stroke-width="1.5"/>
+  <text x="1184" y="308" class="t" style="font-size:20px">feeds</text>
+  <text x="1184" y="336" class="s">Code reads the feeds; the model weighs</text>
+  <text x="1184" y="358" class="s">the items; the weightiest become research.</text>
+
+  <rect x="1164" y="404" width="352" height="112" rx="10" fill="#ffffff" stroke="#1a7f37" stroke-width="1.5"/>
+  <text x="1184" y="436" class="t" style="font-size:20px">research</text>
+  <text x="1184" y="464" class="s">An agent reads; code keeps only the facts</text>
+  <text x="1184" y="486" class="s">whose sentence is on a page it read.</text>
+
+  <rect x="1164" y="532" width="352" height="80" rx="10" fill="none" stroke="#1a7f37" stroke-width="1.5" stroke-dasharray="6 6"/>
+  <text x="1184" y="564" class="t" style="font-size:20px">+ what the lead writes</text>
+  <text x="1184" y="592" class="s">Saved only if its trial writes a file.</text>
+
+  <text x="1164" y="650" class="mono">five.llm.ask · five.llm.agent</text>
+  <text x="1164" y="676" class="mono">five.web.search · .text · .read</text>
+  <text x="1164" y="702" class="mono">five.board.post · node:fs</text>
+
+  <!-- The workspace -->
+  <rect x="60" y="830" width="980" height="130" rx="14" class="box"/>
+  <text x="84" y="866" class="tag">THE WORKSPACE · WHAT LASTS</text>
+  <text x="84" y="900" class="mono">news/&lt;date&gt;.md   news/stories/&lt;slug&gt;.md   memory/lead.md   chats/</text>
+  <text x="84" y="932" class="s">Every run's changes are kept first, and put back when the run fails.</text>
+
+  <!-- The model -->
+  <rect x="1140" y="830" width="400" height="130" rx="14" class="box"/>
+  <text x="1164" y="866" class="tag">MODEL SLOTS</text>
+  <text x="1164" y="898" class="t" style="font-size:20px">Ollama or MLX · qwen3.5 4b</text>
+  <text x="1164" y="928" class="s">Every agent's calls: the lead's, the chat's,</text>
+  <text x="1164" y="950" class="s">the workers'. 4 at once; the chat's go first.</text>
+
+  <!-- Arrows -->
+  <path d="M260 300 V372" class="line"/>
+  <path d="M260 380 V308" class="line"/>
+  <text x="272" y="346" class="lab">talk</text>
+
+  <path d="M800 300 V372" class="line"/>
+  <text x="812" y="346" class="lab">starts</text>
+
+  <path d="M1040 225 H1132" class="line"/>
+  <text x="1052" y="214" class="lab">starts</text>
+
+  <path d="M800 550 V622" class="line"/>
+  <text x="812" y="594" class="lab">posts tasks</text>
+
+  <path d="M1040 690 H1132" class="line"/>
+  <text x="1056" y="680" class="lab">takes one</text>
+  <path d="M1132 720 H1048" class="line"/>
+  <text x="1056" y="742" class="lab">result</text>
+
+  <path d="M1040 465 H1132" class="line"/>
+  <text x="1048" y="455" class="lab">writes code</text>
+
+  <path d="M460 465 H552" class="line"/>
+  <text x="472" y="455" class="lab">transcript</text>
+
+  <path d="M1250 750 L900 822" class="line"/>
+  <text x="1060" y="776" class="lab">write</text>
+  <path d="M560 520 H510 V822" class="dash"/>
+  <text x="456" y="700" class="lab">notes</text>
+
+  <path d="M1340 750 V822" class="dash"/>
+</svg>
