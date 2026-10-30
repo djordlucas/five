@@ -48,6 +48,21 @@ of them: one process, one SQLite file, a local model server.
 
 `docs/team.svg` is the source of the picture; `docs/team.png` is it rendered at 2×.
 
+## Results
+
+Each test runs five from a clean start for 30 minutes on its news-desk goal,
+then counts the facts that passed the checks. The best so far is all on the
+4B model: 78 facts in 13 stories, every research run keeping some.
+
+![Checked facts per 30-minute run, tests 8 to 16, on Ollama then MLX](docs/runs.png)
+
+What moved the numbers was mostly not the model but what code does around it:
+a lead on the 9B model planned better (tests 9–10) but did not fit beside the
+workers in 16 GB; on MLX, sampling greedily made the 4B loop (13), and its
+presence penalty broke JSON that Ollama would have constrained (14); telling an
+agent two steps before its last, and asking for facts from the pages it read
+when its notes give none, doubled what was kept (16).
+
 ## How it works
 
 | Part | What it does |
@@ -64,7 +79,7 @@ of them: one process, one SQLite file, a local model server.
 | History | Before a run first changes a file, five keeps the file as it was, in `.five/history/run-<n>/`: the host keeps its own writes (`write_file`, `append_file`), and a worker's child process patches `node:fs` so its code's writes are kept too (`src/runner/keep.ts`, `src/workers/history.ts`). When a run fails, five puts back every file it changed and removes those it made, and says so in the task's error. A file's history is in the Workspace page, where any version can be viewed or put back; putting one back keeps what it replaced. The last 500 runs are kept. |
 | Inbox | The lead's messages to the person (`message_person`, with a subject, naming the workspace files it comes from), and the person's to five, which the lead reads at its next run — soon after. |
 | Settings | `src/workers/settings.ts`: slots, task runs, when the lead runs, steps and context budget of an agent, result size, image size, chat wait. Changed live on the Config page, kept in the state; the environment gives the defaults. |
-| seven's tools | `run_js`, `define_tool`, `start_tool` and the rest, and the tools the agents build, are there for any agent given them by name; `view_image` and `read_pdf` too. Five adds small tools of its own: `read_file`, `write_file`, `append_file`, `list_files`, `fetch_url` (a page as text, a feed as its items) and `search_web` (DuckDuckGo). |
+| seven's tools | `run_js`, `define_tool`, `start_tool` and the rest, and the tools the agents build, are there for any agent given them by name; `view_image` and `read_pdf` too. Five adds small tools of its own: `read_file`, `write_file`, `append_file`, `list_files` — which leave dot files alone, a task worker's own state such as `news/.seen.json` — `fetch_url` (a page as text, a feed as its items) and `search_web` (DuckDuckGo). |
 | The model | Ollama, `qwen3.5:4b` by default, 16k tokens a slot; or MLX (`FIVE_LLM=mlx`). Tool calls a small model writes as text are recovered. |
 | State | `<workspace>/.five/five.db`: the event log, the board, the task workers, the goal, the settings, the inbox, tools, libraries, background runs, and whether five was running. |
 

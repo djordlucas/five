@@ -32,6 +32,11 @@ const READ_LINES = 200;
 /** The latest news files (news/<date>.md) whose links a research task the lead posts may name. */
 const NEWS_DAYS = 3;
 
+/** A dot file, or one in a dot directory: a task worker's own state, such as feeds' news/.seen.json. */
+const isPrivate = (p: string) => p.split(/[\\/]/).some((part) => part.startsWith(".") && part !== "." && part !== "..");
+const privateError = (p: string) =>
+  `error: ${p} is a task worker's own state (a dot file): agents leave it to the worker that keeps it.`;
+
 const str = (v: unknown) => (typeof v === "string" ? v : v === undefined || v === null ? "" : String(v));
 
 export function workspaceTools(d: Deps): AgentTool[] {
@@ -59,6 +64,7 @@ export function workspaceTools(d: Deps): AgentTool[] {
       },
       run: (a) =>
         guard(() => {
+          if (isPrivate(str(a.path))) return privateError(str(a.path));
           const { entry, bytes } = ws().read(str(a.path));
           if (bytes.subarray(0, 8000).includes(0)) return `${entry.path} is a binary file (${entry.bytes} bytes).`;
           const all = bytes.toString("utf8").split("\n");
@@ -92,6 +98,7 @@ export function workspaceTools(d: Deps): AgentTool[] {
         guard(() => {
           const later = futureDate(str(a.path));
           if (later) return `error: ${later}`;
+          if (isPrivate(str(a.path))) return privateError(str(a.path));
           const w = ws();
           if (a.replace !== true) {
             try {
@@ -117,6 +124,7 @@ export function workspaceTools(d: Deps): AgentTool[] {
       },
       run: (a, run) =>
         guard(() => {
+          if (isPrivate(str(a.path))) return privateError(str(a.path));
           const w = ws();
           let before = "";
           try {
@@ -141,11 +149,13 @@ export function workspaceTools(d: Deps): AgentTool[] {
       run: (a) =>
         guard(() => {
           const p = str(a.path).replace(/^\.\/?$/, "");
+          if (isPrivate(p)) return privateError(p);
           const dir = ws().list(p);
-          if (!dir.entries.length) return `${dir.path || "the workspace"} is empty.`;
-          const shown = dir.entries.slice(0, 200);
+          const entries = dir.entries.filter((e) => !isPrivate(e.path));
+          if (!entries.length) return `${dir.path || "the workspace"} is empty.`;
+          const shown = entries.slice(0, 200);
           const lines = shown.map((e) => (e.dir ? `${e.path}/` : `${e.path} (${e.bytes} bytes)`));
-          if (dir.entries.length > shown.length) lines.push(`… and ${dir.entries.length - shown.length} more`);
+          if (entries.length > shown.length) lines.push(`… and ${entries.length - shown.length} more`);
           return lines.join("\n");
         }),
     },

@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="600" viewBox="0 0 1400 600">
+<style>text{font-family:"Helvetica Neue",Helvetica,Arial,sans-serif;fill:#0b0b0b}.t{font-size:28px;font-weight:700}.s{font-size:18px;fill:#52514e}.v{font-size:18px;font-weight:600}.ax{font-size:15px;fill:#52514e}.x{font-size:17px;font-weight:600}.n{font-size:14px;fill:#52514e}.lg{font-size:17px;fill:#52514e}</style>
+<rect width="1400" height="600" fill="#fcfcfb"/>
+<text x="40" y="56" class="t">Checked facts per 30-minute run</text>
+<text x="40" y="88" class="s">Facts kept only when their sentence is on a page the agent read, every number included. qwen3.5 on a 16 GB Apple M4.</text>
+<rect x="40" y="112" width="16" height="16" rx="3" fill="#2a78d6"/><text x="64" y="126" class="lg">Ollama</text>
+<rect x="160" y="112" width="16" height="16" rx="3" fill="#eb6834"/><text x="184" y="126" class="lg">MLX</text>
+<line x1="90" y1="470.0" x2="1360" y2="470.0" stroke="#e7e6e2"/><text x="78" y="475.0" class="ax" text-anchor="end">0</text>
+<line x1="90" y1="395.0" x2="1360" y2="395.0" stroke="#e7e6e2"/><text x="78" y="400.0" class="ax" text-anchor="end">20</text>
+<line x1="90" y1="320.0" x2="1360" y2="320.0" stroke="#e7e6e2"/><text x="78" y="325.0" class="ax" text-anchor="end">40</text>
+<line x1="90" y1="245.0" x2="1360" y2="245.0" stroke="#e7e6e2"/><text x="78" y="250.0" class="ax" text-anchor="end">60</text>
+<line x1="90" y1="170.0" x2="1360" y2="170.0" stroke="#e7e6e2"/><text x="78" y="175.0" class="ax" text-anchor="end">80</text>
+<path d="M121.04444444444442 470 V361.5 Q121.04444444444442 357.5 125.04444444444442 357.5 H196.06666666666666 Q200.06666666666666 357.5 200.06666666666666 361.5 V470 Z" fill="#2a78d6"/>
+<text x="160.55555555555554" y="347.5" class="v" text-anchor="middle">30</text>
+<text x="160.55555555555554" y="498" class="x" text-anchor="middle">Test 8</text>
+<text x="160.55555555555554" y="522" class="n" text-anchor="middle">4b lead</text>
+<path d="M262.15555555555557 470 V320.25 Q262.15555555555557 316.25 266.15555555555557 316.25 H337.1777777777778 Q341.1777777777778 316.25 341.1777777777778 320.25 V470 Z" fill="#2a78d6"/>
+<text x="301.6666666666667" y="306.25" class="v" text-anchor="middle">41</text>
+<text x="301.6666666666667" y="498" class="x" text-anchor="middle">Test 9</text>
+<text x="301.6666666666667" y="522" class="n" text-anchor="middle">9b lead,</text>
+<text x="301.6666666666667" y="541" class="n" text-anchor="middle">swapping</text>
+<path d="M403.26666666666665 470 V252.75 Q403.26666666666665 248.75 407.26666666666665 248.75 H478.2888888888889 Q482.2888888888889 248.75 482.2888888888889 252.75 V470 Z" fill="#2a78d6"/>
+<text x="442.77777777777777" y="238.75" class="v" text-anchor="middle">59</text>
+<text x="442.77777777777777" y="498" class="x" text-anchor="middle">Test 10</text>
+<text x="442.77777777777777" y="522" class="n" text-anchor="middle">9b lead,</text>
+<text x="442.77777777777777" y="541" class="n" text-anchor="middle">notes</text>
+<path d="M544.3777777777779 470 V324.0 Q544.3777777777779 320.0 548.3777777777779 320.0 H619.4000000000001 Q623.4000000000001 320.0 623.4000000000001 324.0 V470 Z" fill="#2a78d6"/>
+<text x="583.8888888888889" y="310.0" class="v" text-anchor="middle">40</text>
+<text x="583.8888888888889" y="498" class="x" text-anchor="middle">Test 11</text>
+<text x="583.8888888888889" y="522" class="n" text-anchor="middle">4b</text>
+<path d="M685.4888888888889 470 V440.25 Q685.4888888888889 436.25 689.4888888888889 436.25 H760.5111111111112 Q764.5111111111112 436.25 764.5111111111112 440.25 V470 Z" fill="#eb6834"/>
+<text x="725.0" y="426.25" class="v" text-anchor="middle">9</text>
+<text x="725.0" y="498" class="x" text-anchor="middle">Test 12</text>
+<text x="725.0" y="522" class="n" text-anchor="middle">9b lead:</text>
+<text x="725.0" y="541" class="n" text-anchor="middle">out of GPU</text>
+<path d="M826.6 470 V354.0 Q826.6 350.0 830.6 350.0 H901.6222222222223 Q905.6222222222223 350.0 905.6222222222223 354.0 V470 Z" fill="#eb6834"/>
+<text x="866.1111111111111" y="340.0" class="v" text-anchor="middle">32</text>
+<text x="866.1111111111111" y="498" class="x" text-anchor="middle">Test 13</text>
+<text x="866.1111111111111" y="522" class="n" text-anchor="middle">greedy:</text>
+<text x="866.1111111111111" y="541" class="n" text-anchor="middle">loops</text>
+<path d="M967.7111111111112 470 V436.5 Q967.7111111111112 432.5 971.7111111111112 432.5 H1042.7333333333333 Q1046.7333333333333 432.5 1046.7333333333333 436.5 V470 Z" fill="#eb6834"/>
+<text x="1007.2222222222223" y="422.5" class="v" text-anchor="middle">10</text>
+<text x="1007.2222222222223" y="498" class="x" text-anchor="middle">Test 14</text>
+<text x="1007.2222222222223" y="522" class="n" text-anchor="middle">penalty</text>
+<text x="1007.2222222222223" y="541" class="n" text-anchor="middle">broke JSON</text>
+<path d="M1108.8222222222223 470 V327.75 Q1108.8222222222223 323.75 1112.8222222222223 323.75 H1183.8444444444444 Q1187.8444444444444 323.75 1187.8444444444444 327.75 V470 Z" fill="#eb6834"/>
+<text x="1148.3333333333335" y="313.75" class="v" text-anchor="middle">39</text>
+<text x="1148.3333333333335" y="498" class="x" text-anchor="middle">Test 15</text>
+<text x="1148.3333333333335" y="522" class="n" text-anchor="middle">greedy</text>
+<text x="1148.3333333333335" y="541" class="n" text-anchor="middle">JSON</text>
+<path d="M1249.9333333333334 470 V181.5 Q1249.9333333333334 177.5 1253.9333333333334 177.5 H1324.9555555555555 Q1328.9555555555555 177.5 1328.9555555555555 181.5 V470 Z" fill="#eb6834"/>
+<text x="1289.4444444444446" y="167.5" class="v" text-anchor="middle">78</text>
+<text x="1289.4444444444446" y="498" class="x" text-anchor="middle">Test 16</text>
+<text x="1289.4444444444446" y="522" class="n" text-anchor="middle">step warning,</text>
+<text x="1289.4444444444446" y="541" class="n" text-anchor="middle">page fallback</text>
+<line x1="90" y1="470" x2="1360" y2="470" stroke="#52514e" stroke-width="1.5"/>
+</svg>

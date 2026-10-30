@@ -844,6 +844,37 @@ test("a date that has not come yet is refused in a task and a path", async () =>
   assert.equal(five.five.board.counts().open, 0);
 });
 
+test("a dot file is a task worker's own state: agents' file tools neither list, read nor write it", async () => {
+  const { five, cfg } = make([
+    {
+      calls: [
+        ["list_files", { path: "news" }],
+        ["read_file", { path: "news/.seen.json" }],
+        ["write_file", { path: "news/.seen.json", content: "[]", replace: true }],
+        ["append_file", { path: "news/.seen.json", content: "x" }],
+      ],
+    },
+    { content: "ok" },
+  ]);
+  fs.mkdirSync(path.join(cfg.workspace, "news"), { recursive: true });
+  fs.writeFileSync(path.join(cfg.workspace, "news/.seen.json"), '["a"]');
+  fs.writeFileSync(path.join(cfg.workspace, "news/today.md"), "x");
+  const d = five.five.d;
+  const run = new Run({ n: d.state.nextRun(), worker: "lead", kind: "lead", log: noopLogger, emit: d.emit });
+  await runScope.run(run, () =>
+    runAgent(d, run, {
+      system: "You are a test.",
+      messages: [{ role: "user", content: "go" }],
+      tools: workspaceTools(d),
+    }),
+  );
+  const [listed, ...refused] = events(five).flatMap((e) => (e.type === "tool" ? [e.result] : []));
+  assert.equal(listed, "news/today.md (1 bytes)");
+  assert.equal(refused.length, 3);
+  for (const r of refused) assert.match(r, /^error: news\/\.seen\.json is a task worker's own state/);
+  assert.equal(fs.readFileSync(path.join(cfg.workspace, "news/.seen.json"), "utf8"), '["a"]');
+});
+
 test("define_worker: tried on a trial task first, refused for five's own workers and for a worker that works; then it does a task", async () => {
   const code = `export default async ({ task }) => {
   const out = await five.llm.ask("Count the words: " + task.input, { schema: { type: "object", properties: { n: { type: "integer" } }, required: ["n"] } });
