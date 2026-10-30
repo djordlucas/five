@@ -27,6 +27,12 @@ export const MLX_ENDPOINT = "http://localhost:8080";
  * small model fetches the same page twelve times over.
  */
 export const SAMPLING = { temperature: 1, top_p: 0.95, top_k: 20, presence_penalty: 1.5 };
+/**
+ * Sampling of a reply that must be JSON: greedy. Ollama constrains such a reply
+ * to its schema; MLX cannot, and the presence penalty — which punishes every
+ * quote, comma and brace already written — breaks the JSON within a few lines.
+ */
+export const JSON_SAMPLING = { temperature: 0 };
 /** Tries of a call whose connection fails. */
 const ATTEMPTS = 2;
 
@@ -83,7 +89,7 @@ export class Mlx implements ChatModel {
       stream: true,
       stream_options: { include_usage: true },
       max_tokens: maxTokens ?? this.opts.maxTokens,
-      ...SAMPLING,
+      ...(format ? JSON_SAMPLING : SAMPLING),
       chat_template_kwargs: { enable_thinking: this.opts.think },
     });
 

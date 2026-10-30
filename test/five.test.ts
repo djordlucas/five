@@ -690,6 +690,7 @@ test("the MLX client: streamed tool calls in pieces, the tool's reply by call id
     assert.equal(second.message.content, '{"ok": true}');
     const sent = bodies[1]?.messages as { role: string; content: string; tool_call_id?: string; thinking?: string }[];
     assert.match(sent[0]?.content ?? "", /^S\n\nReply with only JSON that matches this JSON Schema/);
+    assert.deepEqual([bodies[1]?.temperature, bodies[1]?.presence_penalty], [0, undefined], "JSON is sampled greedily");
     assert.equal(sent[2]?.thinking, undefined);
     assert.equal(sent[3]?.tool_call_id, "c1");
 
