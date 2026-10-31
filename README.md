@@ -21,8 +21,10 @@
 
 five is an experiment in getting real, unattended work out of a 4B model on a
 laptop. One big agent with a long context drifts, repeats itself and forgets;
-five splits the work instead. Line seven/nine's sibling, and the most minimal
-of them: one process, one SQLite file, a local model server.
+five splits the work instead. Line seven/nine's sibling: a Node process that
+runs the loop and serves the UI, a child process for each task worker's run and
+each piece of code an agent runs, one SQLite file, and a local model server —
+Ollama, or MLX on Apple silicon.
 
 ## The team
 
@@ -69,12 +71,12 @@ when its notes give none, doubled what was kept (16).
 |---|---|
 | The main loop | `src/workers/scheduler.ts`, code and no model. Once a second, and whenever a run ends, it starts what there is room for: a task for the `feeds` worker every `feedsEverySeconds` (15 min by default) when none is on the board; the lead when the board has fewer open tasks than `minOpenTasks` (at most every 30 s), when `leadEverySeconds` have passed, or soon after a chat, a goal change or an inbox message; then a task worker for each open task, oldest first, up to `taskRuns` at once. A new five's lead waits for the first result, so it plans from what the workers found rather than from memory. Paused, it starts neither; Stop also ends the lead and task runs in progress. The chat runs either way. |
 | Runs | One worker at work: the lead planning, the chat talking, a task worker on one task. Runs are numbered across restarts; every event carries its run's number. A task whose run is cut off by a restart goes back on the board. |
-| Model slots | Every model call goes through `src/workers/pool.ts`, which sends at most `slots` at once (match Ollama's `OLLAMA_NUM_PARALLEL`) and queues the rest — the chat's first. On a 16 GB M4, `qwen3.5:4b` keeps about 25 tokens/s per call with 4 at once, but a context not yet in a slot is read one at a time, at about 340 tokens/s for the whole machine: which is why contexts are kept small. |
-| Contexts | An agent — the lead, the chat's answer, a task worker's `llm.agent` — starts from a context five builds, only grows by appending (so each call finds the earlier part already in its slot and reads only what is new), and is dropped when the agent is done. What lasts is in the workspace and on the board. Each agent gets only the tools it needs. Near `runTokens` (12000 by default) five tells it to finish; past it, it ends. A long tool result is kept whole in `results/`, and the agent gets its start and the path. |
-| The board | Tasks: a worker's name, a title, an input, and when done a short result naming the files where the work is. The lead posts them, as can the chat, a task worker (`five.board.post`), five itself (the feeds) and the person (Board page). A task like one already open, running or done in the last 30 minutes — the same worker and story, or a title saying much the same — is refused: small models post the same task again and again. |
+| Model slots | Every model call goes through `src/workers/pool.ts`, which sends at most `slots` at once (match the server's: Ollama's `OLLAMA_NUM_PARALLEL`, MLX's `--decode-concurrency`) and queues the rest — the chat's first. Ollama's slots mostly take turns; MLX decodes them together, so four calls at once take about as long as one. Either way a context not yet cached is read before the first word, which is why contexts are kept small. |
+| Contexts | An agent — the lead, the chat's answer, a task worker's `llm.agent` — starts from a context five builds, only grows by appending (so each call finds the earlier part already in its slot and reads only what is new), and is dropped when the agent is done. What lasts is in the workspace and on the board. Each agent gets only the tools it needs. Near `runTokens` (12000 by default) five tells it to finish; past it, it ends. Two calls before its last step, five tells it to answer now: small models otherwise read until their steps run out and write nothing. A long tool result is kept whole in `results/`, and the agent gets its start and the path. |
+| The board | Tasks: a worker's name, a title, an input, and when done a short result naming the files where the work is. The lead posts them, as can the chat, a task worker (`five.board.post`), five itself (the feeds) and the person (Board page). A task like one already open, running or done in the last 30 minutes — the same worker and story, or a title saying much the same — is refused: small models post the same task again and again. A research task the lead posts must name a link from a recent `news/<date>.md` or a story five follows (`story: <slug>`): a small model otherwise posts what it remembers, years old. |
 | The lead | Fixed, five's own (`src/workers/lead.ts`). Each run's prompt is built fresh: the goal, the board (open, running, the latest results), the task workers with their counts, its notes (`memory/lead.md`), the person's unread inbox messages and the latest chat. A run that did not update its notes is reminded once, at its end. It posts and cancels tasks, writes task workers, sets the goal, keeps its notes and messages the person (one a run); its own tools are the board's, the workers', the files', `define_library`, `read_library` and `run_js`. |
-| Task workers | Code the lead writes with `define_worker`: an ES module whose default export gets `{ task }` and returns the result, run in a child process of its own. It reaches five through `five.llm.ask(prompt, { system, schema })` — one model call, its reply parsed when a JSON schema constrains it — `five.llm.agent({ prompt, tools, maxSteps })`, `five.web.text / feed / search`, `five.web.read()` (what the run's agents read — pages and search results — to check their reports against), and `five.board.post`; Node's `fs` works in the workspace. Code does what code can, the model what needs judgment. A worker that returns nothing, or a placeholder such as `{"done": true}` instead of saying in words what it did, has failed. Five keeps at most `maxWorkers` task workers (4 by default): past it, the lead deletes one before it defines another. A revision of a worker is refused while none of its latest five tasks failed (small models rewrite working code for the sake of it), Every worker the lead defines, new or revised, is first tried once on `test_input` in a copy of the workspace, where it can break nothing; it is saved only if the trial works, and the trial's result says which files it wrote. The lead and the chat cannot be replaced. Libraries (`lib:name`) are bundled in, as for a tool. |
-| Seeds | A new five starts with two task workers, the lead's to revise like its own: `research` (a small agent searches and reads, and reports each fact with a sentence copied from its page; code keeps only the facts it finds in what the agent read — the sentence as quoted, or the page's own sentence that has most of the fact's words and every number, which is then the quote — on the page it names first, else any other it read, which becomes the source; it skips those the story has already, and adds the rest under today's date to the story's file in `news/stories/`) and `feeds` (news feeds into today's digest: code fetches, parses and remembers what it has seen; the model picks what matters and weighs it, in batches of 15, with a schema; the three weightiest new items become research tasks). Their sources are in `src/workers/seeds/`. And a goal: a news desk that never closes. |
+| Task workers | Code the lead writes with `define_worker`: an ES module whose default export gets `{ task }` and returns the result, run in a child process of its own. It reaches five through `five.llm.ask(prompt, { system, schema })` — one model call, its reply parsed when a JSON schema constrains it — `five.llm.agent({ prompt, tools, maxSteps })`, `five.web.text / feed / search`, `five.web.read()` (what the run's agents read — pages and search results — to check their reports against), and `five.board.post`; Node's `fs` works in the workspace. Code does what code can, the model what needs judgment. A worker's result is text saying in words what it did: one that returns nothing, an object such as `{"factsFound": 0}` or a placeholder has failed. Five keeps at most `maxWorkers` task workers (4 by default): past it, the lead deletes one before it defines another. A revision of a worker is refused while none of its latest five tasks failed (small models rewrite working code for the sake of it). Every worker the lead defines, new or revised, is first tried once on `test_input` in a copy of the workspace, where it can break nothing; it is saved only if the trial works and writes a file — a worker's work is what it leaves in the workspace — and the trial's result says which files it wrote. The lead and the chat cannot be replaced. Libraries (`lib:name`) are bundled in, as for a tool. |
+| Seeds | A new five starts with two task workers, the lead's to revise like its own: `research` (a small agent searches and reads, and reports each fact with a sentence copied from its page; code keeps only the facts it finds in what the agent read — the sentence as quoted, or the page's own sentence that has most of the fact's words and every number, which is then the quote — on the page it names first, else any other it read, which becomes the source; it skips those the story has already, and adds the rest under today's date to the story's file in `news/stories/`; when the agent's notes give no fact, the facts are asked for from the pages it read) and `feeds` (news feeds into today's digest: code fetches, parses and remembers what it has seen, in `news/.seen.json`; the model picks what matters and weighs it, in batches of 15, with a schema; the three weightiest new items become research tasks). Their sources are in `src/workers/seeds/`. And a goal: a news desk that never closes. |
 | The chat | Fixed (`src/workers/chat.ts`). The person's first message opens a chat run with a snapshot of five — the goal, what runs, the board — and its messages are kept while the chat is open. It answers from the files, the board and the web, and changes course when asked (`set_goal`, `post_task`). After an answer it waits `chatWaitSeconds` for the person; then, or when they leave, its transcript goes to `chats/` and the lead reads it at its next run. |
 | History | Before a run first changes a file, five keeps the file as it was, in `.five/history/run-<n>/`: the host keeps its own writes (`write_file`, `append_file`), and a worker's child process patches `node:fs` so its code's writes are kept too (`src/runner/keep.ts`, `src/workers/history.ts`). When a run fails, five puts back every file it changed and removes those it made, and says so in the task's error. A file's history is in the Workspace page, where any version can be viewed or put back; putting one back keeps what it replaced. The last 500 runs are kept. |
 | Inbox | The lead's messages to the person (`message_person`, with a subject, naming the workspace files it comes from), and the person's to five, which the lead reads at its next run — soon after. |
@@ -130,11 +132,30 @@ phone, a bottom tab bar.
 | Config | The goal, to read and change, and the settings, grouped — model, workers, runs, chat — each with what it does and its default; Apply changes them while five runs, Reset puts them all back. |
 | Monitor | Every child process since five started — each `run_js`, tool call, `define_tool` trial, background run and task worker — newest first, with its run and call, state and duration. One shows its error or result, its output (followed live), its arguments and its code; a live one can be killed. |
 
+![Activity: four research runs at once, the model's four slots full, and the chat](docs/screenshots/activity.png)
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/board.png" alt="Board: every task with its worker, who posted it and its result"><br><b>Board</b>: tasks and their results</td>
+    <td width="50%"><img src="docs/screenshots/files.png" alt="Workspace: a story file, each fact with its source and the page's sentence"><br><b>Workspace</b>: a story, each fact with its quoted source</td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/workers.png" alt="Workspace, Workers: the research worker's description, counts and code"><br><b>Workers</b>: a task worker's code</td>
+    <td><img src="docs/screenshots/monitor.png" alt="Monitor: four research workers running as child processes, one opened"><br><b>Monitor</b>: workers as child processes</td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/config.png" alt="Config: the goal and the live settings"><br><b>Config</b>: the goal and live settings</td>
+    <td><img src="docs/screenshots/inbox.png" alt="Inbox: a message to five, read by the lead at its next run"><br><b>Inbox</b>: messages to and from the lead</td>
+  </tr>
+</table>
+
+<p align="center"><img src="docs/screenshots/activity-phone.png" width="300" alt="Activity on a phone: the chat, with the tab bar at the bottom"></p>
+
 ## Running
 
 | How | Commands | UI |
 |---|---|---|
-| Docker, Ollama on the host | `make up` · `make logs` · `make down` | `http://<host>:5555` |
+| Docker, Ollama or MLX on the host | `make up` · `make logs` · `make down` | `http://<host>:5555` |
 | Host, Node ≥ 24 | `npm ci && npm ci --prefix web && make start-host` | `http://127.0.0.1:5555` |
 | Working on the UI, beside either | `make ui-host`: the UI from source, reloading as you edit; its API calls go to five on :5555 | `http://<host>:5173` |
 
@@ -152,7 +173,7 @@ defaults to; `.env.example` lists every variable:
 | `FIVE_MLX_LEAD_ENDPOINT` | `http://localhost:8081` (Docker: `host.docker.internal`) | MLX's server for the lead's model |
 | `FIVE_CONTEXT_TOKENS` | `16384` | the window of each of the model's slots |
 | `FIVE_THINK` | `off` | let a thinking model think |
-| `FIVE_SLOTS` | `4` | *setting:* model calls at once; match `OLLAMA_NUM_PARALLEL` |
+| `FIVE_SLOTS` | `4` | *setting:* model calls at once; match the server's (`OLLAMA_NUM_PARALLEL`, MLX's `--decode-concurrency`) |
 | `FIVE_TASK_RUNS` | `4` | *setting:* task runs at once |
 | `FIVE_MAX_STEPS` | `12` | *setting:* model calls in one agent |
 | `FIVE_RUN_TOKENS` | `12000` | *setting:* the context budget of one agent |
@@ -229,9 +250,14 @@ and the web UI's typecheck. Nothing in the tests calls a model.
 - **No sign-in.** Docker publishes port 5555 on every interface: anyone who
   reaches it can drive the agent, and the agent runs arbitrary code.
   `FIVE_PUBLISH=127.0.0.1` keeps it local.
-- **No context management by five.** Overflow is the agent's to prevent; five
-  only warns it to save to memory and delete messages, and the UI shows the last call's prompt tokens against the
-  window.
+- **Contexts are budgeted, not managed.** An agent is told to finish near
+  `runTokens` and ends past it; five neither summarizes nor trims, so what must
+  last goes to the workspace and the board.
+- **16 GB holds one small model with room, not two.** A 9B lead beside 4B
+  workers did not fit: Ollama refuses to load both, and MLX loads both and then
+  runs out of GPU memory.
+- **A worker's dot files are private by convention.** Agents' file tools leave
+  them alone, but `run_js` and task workers run with all of Node.
 - **A clean reset refuses a workspace that is a git repository**, so running
   from the repo cannot delete it; it then deletes nothing.
 - One five per workspace; nothing prevents a second.
